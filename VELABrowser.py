@@ -1,7 +1,9 @@
-# VELA2 Alpha1
+# VELA2 Alpha2
 # LGPL v3
 
 import sys
+import re
+from urllib.parse import quote_plus
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -9,7 +11,29 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QSplitter, QToolBar
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtGui import QIcon, QAction
+import qtawesome as qta
+
+
+class CustomWebEnginePage(QWebEnginePage):
+    """新しいウィンドウ/タブの処理をカスタマイズしたWebEnginePage"""
+    
+    new_tab_requested = Signal(QUrl)
+    
+    def __init__(self, profile, parent=None):
+        super().__init__(profile, parent)
+    
+    def createWindow(self, window_type):
+        """新しいウィンドウ/タブが要求された時の処理"""
+        # 新しいページを作成して返す
+        page = CustomWebEnginePage(self.profile(), self.parent())
+        page.new_tab_requested.connect(self.new_tab_requested.emit)
+        
+        # URLが設定されたらシグナルを発火
+        page.urlChanged.connect(lambda url: self.new_tab_requested.emit(url))
+        
+        return page
 
 
 class TabItem(QListWidgetItem):
@@ -21,16 +45,17 @@ class TabItem(QListWidgetItem):
 
 
 class VerticalTabBrowser(QMainWindow):
-    """縦タブブラウザのメインウィンドウ"""
+    """縦タブブラウザのメインウィンドウ Alpha2"""
     
     def __init__(self):
         super().__init__()
         self.tabs = []  # WebViewのリスト
+        self.profile = QWebEngineProfile.defaultProfile()
         self.init_ui()
         
     def init_ui(self):
         """UIの初期化"""
-        self.setWindowTitle("VELA2.x Alpha1")
+        self.setWindowTitle("VELA 2.x Alpha2")
         self.setGeometry(100, 100, 1200, 800)
         
         # 中央ウィジェット
@@ -69,20 +94,32 @@ class VerticalTabBrowser(QMainWindow):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(5, 5, 5, 5)
         
-        # 新規タブボタン
-        new_tab_btn = QPushButton("+")
+        # ボタンエリア（横並び）
+        button_layout = QHBoxLayout()
+        
+        # 新規タブボタン（アイコン）
+        new_tab_btn = QPushButton()
+        new_tab_btn.setIcon(qta.icon('fa5s.plus', color='green'))
+        new_tab_btn.setToolTip("新規タブ")
+        new_tab_btn.setFixedSize(40, 40)
         new_tab_btn.clicked.connect(lambda: self.add_new_tab("https://www.google.com"))
-        layout.addWidget(new_tab_btn)
+        button_layout.addWidget(new_tab_btn)
+        
+        # タブを閉じるボタン（アイコン）
+        close_tab_btn = QPushButton()
+        close_tab_btn.setIcon(qta.icon('fa5s.times', color='red'))
+        close_tab_btn.setToolTip("タブを閉じる")
+        close_tab_btn.setFixedSize(40, 40)
+        close_tab_btn.clicked.connect(self.close_current_tab)
+        button_layout.addWidget(close_tab_btn)
+        
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
         
         # タブリスト
         self.tab_list = QListWidget()
         self.tab_list.currentItemChanged.connect(self.on_tab_changed)
         layout.addWidget(self.tab_list)
-        
-        # タブを閉じるボタン
-        close_tab_btn = QPushButton("-")
-        close_tab_btn.clicked.connect(self.close_current_tab)
-        layout.addWidget(close_tab_btn)
         
         return widget
     
@@ -98,27 +135,36 @@ class VerticalTabBrowser(QMainWindow):
         layout.addWidget(toolbar)
         
         # 戻るボタン
-        self.back_btn = QPushButton("←")
+        self.back_btn = QPushButton()
+        self.back_btn.setIcon(qta.icon('fa5s.arrow-left'))
+        self.back_btn.setToolTip("戻る")
         self.back_btn.clicked.connect(self.go_back)
         toolbar.addWidget(self.back_btn)
         
         # 進むボタン
-        self.forward_btn = QPushButton("→")
+        self.forward_btn = QPushButton()
+        self.forward_btn.setIcon(qta.icon('fa5s.arrow-right'))
+        self.forward_btn.setToolTip("進む")
         self.forward_btn.clicked.connect(self.go_forward)
         toolbar.addWidget(self.forward_btn)
         
         # 更新ボタン
-        self.reload_btn = QPushButton("⟳")
+        self.reload_btn = QPushButton()
+        self.reload_btn.setIcon(qta.icon('fa5s.sync-alt'))
+        self.reload_btn.setToolTip("再読み込み")
         self.reload_btn.clicked.connect(self.reload_page)
         toolbar.addWidget(self.reload_btn)
         
         # アドレスバー
         self.url_bar = QLineEdit()
+        self.url_bar.setPlaceholderText("URLを入力、またはキーワードで検索")
         self.url_bar.returnPressed.connect(self.navigate_to_url)
         toolbar.addWidget(self.url_bar)
         
         # Goボタン
-        go_btn = QPushButton("Go")
+        go_btn = QPushButton()
+        go_btn.setIcon(qta.icon('fa5s.search'))
+        go_btn.setToolTip("移動/検索")
         go_btn.clicked.connect(self.navigate_to_url)
         toolbar.addWidget(go_btn)
         
@@ -130,10 +176,56 @@ class VerticalTabBrowser(QMainWindow):
         
         return widget
     
-    def add_new_tab(self, url):
+    def is_valid_url(self, text):
+        """テキストが有効なURLかどうかを判定"""
+        # URLパターンのチェック
+        url_pattern = re.compile(
+            r'^https?://'  # http:// or https://
+            r'|^www\.'      # www.で始まる
+            r'|^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'  # domain.com形式
+        )
+        
+        # スペースが含まれていたら検索クエリ
+        if ' ' in text:
+            return False
+        
+        # URLパターンにマッチするか
+        if url_pattern.match(text):
+            return True
+        
+        # ドット+TLD形式をチェック（例: example.com）
+        if '.' in text and not text.startswith('.') and not text.endswith('.'):
+            parts = text.split('.')
+            if len(parts) >= 2 and len(parts[-1]) >= 2:
+                return True
+        
+        return False
+    
+    def process_url_or_search(self, text):
+        """URLまたは検索クエリを処理"""
+        text = text.strip()
+        
+        if self.is_valid_url(text):
+            # URLとして処理
+            if not text.startswith("http://") and not text.startswith("https://"):
+                text = "https://" + text
+            return text
+        else:
+            # Google検索として処理
+            search_query = quote_plus(text)
+            return f"https://www.google.com/search?q={search_query}"
+    
+    def add_new_tab(self, url, activate=True):
         """新しいタブを追加"""
         # WebViewを作成
         web_view = QWebEngineView()
+        
+        # カスタムページを設定
+        page = CustomWebEnginePage(self.profile, web_view)
+        page.new_tab_requested.connect(lambda url: self.add_new_tab(url.toString(), activate=True))
+        web_view.setPage(page)
+        
+        # URLを設定
         web_view.setUrl(QUrl(url))
         
         # タイトル変更時のイベント接続
@@ -147,9 +239,10 @@ class VerticalTabBrowser(QMainWindow):
         self.tab_list.addItem(tab_item)
         self.tabs.append(web_view)
         
-        # 新しいタブを選択
-        self.tab_list.setCurrentItem(tab_item)
-        
+        # 新しいタブをアクティブにするか
+        if activate:
+            self.tab_list.setCurrentItem(tab_item)
+    
     def on_tab_changed(self, current, previous):
         """タブが切り替わった時の処理"""
         if current is None:
@@ -170,7 +263,7 @@ class VerticalTabBrowser(QMainWindow):
         
         # URLバーを更新
         self.url_bar.setText(web_view.url().toString())
-        
+    
     def update_tab_title(self, web_view, title):
         """タブのタイトルを更新"""
         for i in range(self.tab_list.count()):
@@ -189,13 +282,11 @@ class VerticalTabBrowser(QMainWindow):
                 self.url_bar.setText(url.toString())
     
     def navigate_to_url(self):
-        """URLバーのアドレスに移動"""
+        """URLバーのアドレスに移動または検索"""
         current_item = self.tab_list.currentItem()
         if current_item and isinstance(current_item, TabItem):
-            url = self.url_bar.text()
-            # http(s)://が無い場合は追加
-            if not url.startswith("http://") and not url.startswith("https://"):
-                url = "https://" + url
+            text = self.url_bar.text()
+            url = self.process_url_or_search(text)
             current_item.web_view.setUrl(QUrl(url))
     
     def go_back(self):
@@ -226,8 +317,9 @@ class VerticalTabBrowser(QMainWindow):
                 item.web_view.deleteLater()
                 self.tabs.remove(item.web_view)
         elif self.tab_list.count() == 1:
-            # 最後のタブの場合は警告
+            # 最後のタブの場合は警告（コンソールに出力）
             print("最後のタブは閉じられません")
+
 
 def main():
     app = QApplication(sys.argv)
