@@ -1,19 +1,145 @@
-# VELA2 Alpha2
+# VELA 2.0.0.0a3
 # LGPL v3
 
 import sys
 import re
 from urllib.parse import quote_plus
+
+# ブラウザ情報
+BROWSER_NAME = "VELA"
+BROWSER_VERSION = "2.0.0.0a3"
+BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_VERSION}"
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QHBoxLayout, QPushButton, QLineEdit, QListWidget,
-    QListWidgetItem, QSplitter, QToolBar
+    QListWidgetItem, QSplitter, QToolBar, QDialog,
+    QTabWidget, QLabel, QTextEdit, QFrame
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtGui import QIcon, QAction
 import qtawesome as qta
+
+
+class AboutDialog(QDialog):
+    """ブラウザについて/設定ダイアログ"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{BROWSER_NAME}について")
+        self.setMinimumSize(500, 400)
+        self.init_ui()
+    
+    def init_ui(self):
+        """UIの初期化"""
+        layout = QVBoxLayout(self)
+        
+        # タブウィジェット
+        tab_widget = QTabWidget()
+        
+        # 「ブラウザについて」タブ
+        about_tab = self.create_about_tab()
+        tab_widget.addTab(about_tab, "ブラウザについて")
+        
+        # 「設定」タブ
+        settings_tab = self.create_settings_tab()
+        tab_widget.addTab(settings_tab, "設定")
+        
+        layout.addWidget(tab_widget)
+        
+        # 閉じるボタン
+        close_button = QPushButton("閉じる")
+        close_button.clicked.connect(self.close)
+        layout.addWidget(close_button)
+    
+    def create_about_tab(self):
+        """ブラウザについてタブの作成"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # ブラウザ名とバージョン
+        title_label = QLabel(f"<h1>{BROWSER_NAME}</h1>")
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        version_label = QLabel(f"<h3>バージョン {BROWSER_VERSION}</h3>")
+        version_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(version_label)
+        
+        # 区切り線
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line)
+        
+        # 説明文
+        description = QLabel(
+            f"<p>{BROWSER_NAME}は、左側に縦タブを配置した<br>"
+            "シンプルで使いやすいWebブラウザです。</p>"
+        )
+        description.setAlignment(Qt.AlignCenter)
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        
+        # 技術情報
+        tech_info = QTextEdit()
+        tech_info.setReadOnly(True)
+        tech_info.setMaximumHeight(150)
+        
+        from PySide6 import __version__ as pyside_version
+        from PySide6.QtCore import qVersion
+        
+        tech_text = f"""技術情報:
+• フレームワーク: PySide6 {pyside_version}
+• Qt バージョン: {qVersion()}
+• Python バージョン: {sys.version.split()[0]}
+• エンジン: QtWebEngine (Chromium ベース)
+"""
+        tech_info.setPlainText(tech_text)
+        layout.addWidget(tech_info)
+        
+        # 著作権情報
+        copyright_label = QLabel(
+            "<p style='color: gray; font-size: 10pt;'>"
+            "© 2025-2026 ABATBeliever<br>"
+            "Built with PySide6 and QtWebEngine"
+            "</p>"
+        )
+        copyright_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(copyright_label)
+        
+        layout.addStretch()
+        
+        return widget
+    
+    def create_settings_tab(self):
+        """設定タブの作成（今後の拡張用）"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # プレースホルダー
+        placeholder_label = QLabel(
+            "<h3>設定</h3>"
+            "<p>設定機能は今後のバージョンで実装予定です。</p>"
+            "<p>実装予定の機能:</p>"
+            "<ul>"
+            "<li>デフォルトのホームページ</li>"
+            "<li>検索エンジンの選択</li>"
+            "<li>タブの表示設定</li>"
+            "<li>プライバシー設定</li>"
+            "<li>外観のカスタマイズ</li>"
+            "</ul>"
+        )
+        placeholder_label.setWordWrap(True)
+        layout.addWidget(placeholder_label)
+        
+        layout.addStretch()
+        
+        return widget
 
 
 class CustomWebEnginePage(QWebEnginePage):
@@ -55,8 +181,11 @@ class VerticalTabBrowser(QMainWindow):
         
     def init_ui(self):
         """UIの初期化"""
-        self.setWindowTitle("VELA 2.x Alpha2")
+        self.setWindowTitle(f"{BROWSER_FULL_NAME}")
         self.setGeometry(100, 100, 1200, 800)
+        
+        # メニューバーの作成
+        self.create_menu_bar()
         
         # 中央ウィジェット
         central_widget = QWidget()
@@ -87,6 +216,23 @@ class VerticalTabBrowser(QMainWindow):
         
         # 最初のタブを作成
         self.add_new_tab("https://www.google.com")
+    
+    def create_menu_bar(self):
+        """メニューバーの作成"""
+        menubar = self.menuBar()
+        
+        # ヘルプメニュー
+        help_menu = menubar.addMenu("ヘルプ(&H)(仮)")
+        
+        # 「ブラウザについて」アクション
+        about_action = QAction(f"{BROWSER_NAME}について(&A)", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(about_action)
+    
+    def show_about_dialog(self):
+        """ブラウザについてダイアログを表示"""
+        dialog = AboutDialog(self)
+        dialog.exec()
         
     def create_tab_list(self):
         """左側のタブリストを作成"""
@@ -157,7 +303,7 @@ class VerticalTabBrowser(QMainWindow):
         
         # アドレスバー
         self.url_bar = QLineEdit()
-        self.url_bar.setPlaceholderText("URLを入力、またはキーワードで検索")
+        self.url_bar.setPlaceholderText("URLを入力またはキーワードで検索")
         self.url_bar.returnPressed.connect(self.navigate_to_url)
         toolbar.addWidget(self.url_bar)
         
