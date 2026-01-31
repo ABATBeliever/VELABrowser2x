@@ -1,26 +1,91 @@
-# VELA 2.0.0.0a3
-# LGPL v3
+"""
+ *
+ * VELA Browser
+ * Copyright (C) 2025-2026 ABATBeliever
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>
+ *
+ * For description, please watch "LICENSE" file.
+ *
+"""
 
 import sys
 import re
 from urllib.parse import quote_plus
+from urllib.request import urlopen
+from urllib.error import URLError
+from packaging import version
 
-# ブラウザ情報
-BROWSER_NAME = "VELA"
-BROWSER_VERSION = "2.0.0.0a3"
-BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_VERSION}"
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal, QThread
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QHBoxLayout, QPushButton, QLineEdit, QListWidget,
     QListWidgetItem, QSplitter, QToolBar, QDialog,
-    QTabWidget, QLabel, QTextEdit, QFrame
+    QTabWidget, QLabel, QTextEdit, QFrame, QMessageBox
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
-from PySide6.QtGui import QIcon, QAction
+from PySide6.QtGui import QIcon, QAction, QFont
 import qtawesome as qta
 
+# ブラウザ情報
+BROWSER_NAME                = "VELA"
+BROWSER_CODENAME            = "Praxis"
+BROWSER_VERSION_SEMANTIC    = "2.0.0.0a4"  # セマンティックバージョン（比較用）
+BROWSER_VERSION_NAME        = "2.0.0.0 Alpha4" # バージョン名
+BROWSER_FULL_NAME           = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
+BROWSER_TARGET_Architecture = "win-x64"
+                                 #linux-x64-debian / linux-x64-redhat / rasp-a64 / win-a64 / win-x64
+
+# 更新チェックURL
+UPDATE_CHECK_URL = f"https://abatbeliever.net/upd/VELABrowser/{BROWSER_CODENAME}/{BROWSER_TARGET_Architecture}.updat"
+
+print(BROWSER_FULL_NAME)
+print("\nCopyright (C) 2025-2026 ABATBeliever")
+
+class UpdateChecker(QThread):
+    """更新チェックを行うスレッド"""
+    update_available = Signal(str, str)  # version, message
+    print("[INFO] UpdateCheck Start")
+    
+    def run(self):
+        """更新チェックを実行"""
+        try:
+            with urlopen(UPDATE_CHECK_URL, timeout=5) as response:
+                content = response.read().decode('utf-8').strip()
+                self.parse_update_info(content)
+                print("[INFO] UpdateCheck Close")
+        except (URLError, Exception) as e:
+            # エラーは無視（更新チェック失敗時は何もしない）
+            print(f"[INFO] UpdateCheck Failed({e})")
+    
+    def parse_update_info(self, content):
+        """更新情報をパース"""
+        try:
+            parts = content.split(',', 2)
+            if len(parts) == 3 and parts[0] == "[VELA2]":
+                latest_version = parts[1].strip()
+                update_message = parts[2].strip()
+                
+                # バージョン比較
+                if version.parse(latest_version) > version.parse(BROWSER_VERSION_SEMANTIC):
+                    print("[INFO] UpdateCheck-> New Version Avaliable")
+                    self.update_available.emit(latest_version, update_message)
+                else:
+                    print("[INFO] UpdateCheck-> Latest")
+        except Exception as e:
+            print(f"[INFO] UpdateCheck Failed({e})")
 
 class AboutDialog(QDialog):
     """ブラウザについて/設定ダイアログ"""
@@ -28,15 +93,31 @@ class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{BROWSER_NAME}について")
-        self.setMinimumSize(500, 400)
+        self.setMinimumSize(600, 500)
         self.init_ui()
     
     def init_ui(self):
         """UIの初期化"""
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         
         # タブウィジェット
         tab_widget = QTabWidget()
+        tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #cccccc;
+                background: white;
+            }
+            QTabBar::tab {
+                background: #f0f0f0;
+                padding: 10px 20px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: white;
+                border-bottom: 2px solid #0078d4;
+            }
+        """)
         
         # 「ブラウザについて」タブ
         about_tab = self.create_about_tab()
@@ -48,24 +129,49 @@ class AboutDialog(QDialog):
         
         layout.addWidget(tab_widget)
         
-        # 閉じるボタン
+        # ボタンエリア
+        button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(10, 10, 10, 10)
+        button_layout.addStretch()
+        
         close_button = QPushButton("閉じる")
+        close_button.setMinimumWidth(100)
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0078d4;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #106ebe;
+            }
+            QPushButton:pressed {
+                background-color: #005a9e;
+            }
+        """)
         close_button.clicked.connect(self.close)
-        layout.addWidget(close_button)
+        button_layout.addWidget(close_button)
+        
+        layout.addLayout(button_layout)
     
     def create_about_tab(self):
         """ブラウザについてタブの作成"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
         
-        # ブラウザ名とバージョン
-        title_label = QLabel(f"<h1>{BROWSER_NAME}</h1>")
+        
+        # ブラウザ名
+        title_label = QLabel(f"<h1>{BROWSER_NAME} {BROWSER_CODENAME}</h1>")
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
         
-        version_label = QLabel(f"<h3>バージョン {BROWSER_VERSION}</h3>")
+        # バージョン情報
+        version_label = QLabel(f"<h3>バージョン: {BROWSER_VERSION_NAME}</h3>")
         version_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(version_label)
         
@@ -73,11 +179,12 @@ class AboutDialog(QDialog):
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setFrameShadow(QFrame.Sunken)
+        line.setStyleSheet("background-color: #e0e0e0;")
         layout.addWidget(line)
         
         # 説明文
         description = QLabel(
-            f"<p>{BROWSER_NAME}は、左側に縦タブを配置した<br>"
+            f"<p style='font-size: 11pt;'>{BROWSER_NAME}は、左側に縦タブを配置した<br>"
             "シンプルで使いやすいWebブラウザです。</p>"
         )
         description.setAlignment(Qt.AlignCenter)
@@ -87,25 +194,34 @@ class AboutDialog(QDialog):
         # 技術情報
         tech_info = QTextEdit()
         tech_info.setReadOnly(True)
-        tech_info.setMaximumHeight(150)
+        tech_info.setMaximumHeight(120)
+        tech_info.setStyleSheet("""
+            QTextEdit {
+                background-color: #f5f5f5;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                padding: 2px;
+                font-family: 'Courier New', monospace;
+            }
+        """)
         
         from PySide6 import __version__ as pyside_version
         from PySide6.QtCore import qVersion
         
-        tech_text = f"""技術情報:
-• フレームワーク: PySide6 {pyside_version}
+        tech_text = f"""• フレームワーク: PySide6 {pyside_version}
 • Qt バージョン: {qVersion()}
 • Python バージョン: {sys.version.split()[0]}
 • エンジン: QtWebEngine (Chromium ベース)
+• アーキテクチャ: {BROWSER_TARGET_Architecture}
 """
         tech_info.setPlainText(tech_text)
         layout.addWidget(tech_info)
         
         # 著作権情報
         copyright_label = QLabel(
-            "<p style='color: gray; font-size: 10pt;'>"
-            "© 2025-2026 ABATBeliever<br>"
-            "Built with PySide6 and QtWebEngine"
+            "<p style='color: #666; font-size: 9pt;'>"
+            "© 2025-2026, ABATBeliever.<br>"
+            "Under LGPL v3 License"
             "</p>"
         )
         copyright_label.setAlignment(Qt.AlignCenter)
@@ -116,26 +232,51 @@ class AboutDialog(QDialog):
         return widget
     
     def create_settings_tab(self):
-        """設定タブの作成（今後の拡張用）"""
+        """設定タブの作成"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(15)
+        
+        # タイトル
+        title_label = QLabel("<h2>設定</h2>")
+        layout.addWidget(title_label)
+        
+        # 区切り線
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        line.setStyleSheet("background-color: #e0e0e0;")
+        layout.addWidget(line)
         
         # プレースホルダー
         placeholder_label = QLabel(
-            "<h3>設定</h3>"
-            "<p>設定機能は今後のバージョンで実装予定です。</p>"
-            "<p>実装予定の機能:</p>"
-            "<ul>"
-            "<li>デフォルトのホームページ</li>"
-            "<li>検索エンジンの選択</li>"
-            "<li>タブの表示設定</li>"
-            "<li>プライバシー設定</li>"
-            "<li>外観のカスタマイズ</li>"
-            "</ul>"
+            "<p style='font-size: 11pt;'>設定機能は今後のバージョンで実装予定です。</p>"
+            "<p style='font-size: 10pt; color: #666;'>実装予定の機能:</p>"
         )
-        placeholder_label.setWordWrap(True)
         layout.addWidget(placeholder_label)
+        
+        # 機能リスト
+        features_text = QTextEdit()
+        features_text.setReadOnly(True)
+        features_text.setMaximumHeight(200)
+        features_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f9f9f9;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                padding: 10px;
+            }
+        """)
+        features_text.setPlainText(
+            "• デフォルトのホームページ設定\n"
+            "• 検索エンジンの選択\n"
+            "• 履歴\n"
+            "• プライバシー設定\n"
+            "• 広告ブロック\n"
+            "• UserAgent変更"
+        )
+        layout.addWidget(features_text)
         
         layout.addStretch()
         
@@ -152,13 +293,10 @@ class CustomWebEnginePage(QWebEnginePage):
     
     def createWindow(self, window_type):
         """新しいウィンドウ/タブが要求された時の処理"""
-        # 新しいページを作成して返す
+        print("[INFO] TabControl: Add")
         page = CustomWebEnginePage(self.profile(), self.parent())
         page.new_tab_requested.connect(self.new_tab_requested.emit)
-        
-        # URLが設定されたらシグナルを発火
         page.urlChanged.connect(lambda url: self.new_tab_requested.emit(url))
-        
         return page
 
 
@@ -168,36 +306,52 @@ class TabItem(QListWidgetItem):
         super().__init__(title)
         self.web_view = web_view
         self.url = web_view.url()
-
+        
 
 class VerticalTabBrowser(QMainWindow):
-    """縦タブブラウザのメインウィンドウ Alpha2"""
+    """縦タブブラウザのメインウィンドウ"""
     
     def __init__(self):
         super().__init__()
-        self.tabs = []  # WebViewのリスト
+        self.tabs = []
         self.profile = QWebEngineProfile.defaultProfile()
         self.init_ui()
+        self.check_for_updates()
         
     def init_ui(self):
         """UIの初期化"""
         self.setWindowTitle(f"{BROWSER_FULL_NAME}")
         self.setGeometry(100, 100, 1200, 800)
         
-        # メニューバーの作成
-        self.create_menu_bar()
+        # スタイルシート適用
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #ffffff;
+            }
+            QToolBar {
+                background-color: #f5f5f5;
+                border-bottom: 1px solid #e0e0e0;
+                spacing: 5px;
+            }
+        """)
         
         # 中央ウィジェット
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # メインレイアウト（横方向）
+        # メインレイアウト
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # スプリッターで左右を分割
+        # スプリッター
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #e0e0e0;
+                width: 1px;
+            }
+        """)
         
         # 左側：タブリスト
         self.tab_list_widget = self.create_tab_list()
@@ -207,7 +361,6 @@ class VerticalTabBrowser(QMainWindow):
         browser_widget = self.create_browser_area()
         splitter.addWidget(browser_widget)
         
-        # スプリッターの初期サイズ設定（左:右 = 1:4）
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 4)
         splitter.setSizes([200, 1000])
@@ -217,17 +370,33 @@ class VerticalTabBrowser(QMainWindow):
         # 最初のタブを作成
         self.add_new_tab("https://www.google.com")
     
-    def create_menu_bar(self):
-        """メニューバーの作成"""
-        menubar = self.menuBar()
-        
-        # ヘルプメニュー
-        help_menu = menubar.addMenu("ヘルプ(&H)(仮)")
-        
-        # 「ブラウザについて」アクション
-        about_action = QAction(f"{BROWSER_NAME}について(&A)", self)
-        about_action.triggered.connect(self.show_about_dialog)
-        help_menu.addAction(about_action)
+    def check_for_updates(self):
+        """更新チェックを開始"""
+        self.update_checker = UpdateChecker()
+        self.update_checker.update_available.connect(self.show_update_notification)
+        self.update_checker.start()
+    
+    def show_update_notification(self, latest_version, message):
+        """更新通知を表示"""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("更新が利用可能です")
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setText(f"<h3>VELAの新しいバージョン({latest_version}) が利用可能です</h3>")
+        msg_box.setInformativeText(
+            f"<p>現在のバージョン: {BROWSER_VERSION_SEMANTIC}<br>最新のバージョン: {latest_version}</p>"
+            f"<p><b>更新内容:</b></p>"
+            f"<p>{message}</p>"
+        )
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.setStyleSheet("""
+            QMessageBox {
+                background-color: white;
+            }
+            QLabel {
+                color: #333;
+            }
+        """)
+        msg_box.exec()
     
     def show_about_dialog(self):
         """ブラウザについてダイアログを表示"""
@@ -237,25 +406,61 @@ class VerticalTabBrowser(QMainWindow):
     def create_tab_list(self):
         """左側のタブリストを作成"""
         widget = QWidget()
+        widget.setStyleSheet("""
+            QWidget {
+                background-color: #f9f9f9;
+                border-right: 1px solid #e0e0e0;
+            }
+        """)
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
         
-        # ボタンエリア（横並び）
+        # ボタンエリア
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(5)
         
-        # 新規タブボタン（アイコン）
+        # 新規タブボタン
         new_tab_btn = QPushButton()
-        new_tab_btn.setIcon(qta.icon('fa5s.plus', color='green'))
+        new_tab_btn.setIcon(qta.icon('fa5s.plus', color='#0078d4'))
         new_tab_btn.setToolTip("新規タブ")
-        new_tab_btn.setFixedSize(40, 40)
+        new_tab_btn.setFixedSize(36, 36)
+        new_tab_btn.setStyleSheet("""
+            QPushButton {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #e6f2ff;
+                border-color: #0078d4;
+            }
+            QPushButton:pressed {
+                background-color: #cce4ff;
+            }
+        """)
         new_tab_btn.clicked.connect(lambda: self.add_new_tab("https://www.google.com"))
         button_layout.addWidget(new_tab_btn)
         
-        # タブを閉じるボタン（アイコン）
+        # タブを閉じるボタン
         close_tab_btn = QPushButton()
-        close_tab_btn.setIcon(qta.icon('fa5s.times', color='red'))
+        close_tab_btn.setIcon(qta.icon('fa5s.times', color='#d13438'))
         close_tab_btn.setToolTip("タブを閉じる")
-        close_tab_btn.setFixedSize(40, 40)
+        close_tab_btn.setFixedSize(36, 36)
+        close_tab_btn.setStyleSheet("""
+            QPushButton {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #ffe6e6;
+                border-color: #d13438;
+            }
+            QPushButton:pressed {
+                background-color: #ffcccc;
+            }
+        """)
         close_tab_btn.clicked.connect(self.close_current_tab)
         button_layout.addWidget(close_tab_btn)
         
@@ -264,6 +469,25 @@ class VerticalTabBrowser(QMainWindow):
         
         # タブリスト
         self.tab_list = QListWidget()
+        self.tab_list.setStyleSheet("""
+            QListWidget {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                outline: none;
+            }
+            QListWidget::item {
+                padding: 2px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QListWidget::item:selected {
+                background-color: #e6f2ff;
+                color: #0078d4;
+            }
+            QListWidget::item:hover {
+                background-color: #f5f5f5;
+            }
+        """)
         self.tab_list.currentItemChanged.connect(self.on_tab_changed)
         layout.addWidget(self.tab_list)
         
@@ -278,26 +502,61 @@ class VerticalTabBrowser(QMainWindow):
         
         # ツールバー
         toolbar = QToolBar()
+        toolbar.setMovable(False)
+        toolbar.setStyleSheet("""
+            QToolBar {
+                background-color: #f5f5f5;
+                border-bottom: 1px solid #e0e0e0;
+                spacing: 5px;
+                padding: 5px;
+            }
+            QPushButton {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                padding: 6px;
+            }
+            QPushButton:hover {
+                background-color: #e6f2ff;
+                border-color: #0078d4;
+            }
+            QPushButton:pressed {
+                background-color: #cce4ff;
+            }
+            QLineEdit {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                padding: 6px;
+                font-size: 10pt;
+            }
+            QLineEdit:focus {
+                border-color: #0078d4;
+            }
+        """)
         layout.addWidget(toolbar)
         
         # 戻るボタン
         self.back_btn = QPushButton()
-        self.back_btn.setIcon(qta.icon('fa5s.arrow-left'))
+        self.back_btn.setIcon(qta.icon('fa5s.arrow-left', color='#333'))
         self.back_btn.setToolTip("戻る")
+        self.back_btn.setFixedSize(32, 32)
         self.back_btn.clicked.connect(self.go_back)
         toolbar.addWidget(self.back_btn)
         
         # 進むボタン
         self.forward_btn = QPushButton()
-        self.forward_btn.setIcon(qta.icon('fa5s.arrow-right'))
+        self.forward_btn.setIcon(qta.icon('fa5s.arrow-right', color='#333'))
         self.forward_btn.setToolTip("進む")
+        self.forward_btn.setFixedSize(32, 32)
         self.forward_btn.clicked.connect(self.go_forward)
         toolbar.addWidget(self.forward_btn)
         
         # 更新ボタン
         self.reload_btn = QPushButton()
-        self.reload_btn.setIcon(qta.icon('fa5s.sync-alt'))
+        self.reload_btn.setIcon(qta.icon('fa5s.sync-alt', color='#333'))
         self.reload_btn.setToolTip("再読み込み")
+        self.reload_btn.setFixedSize(32, 32)
         self.reload_btn.clicked.connect(self.reload_page)
         toolbar.addWidget(self.reload_btn)
         
@@ -307,14 +566,23 @@ class VerticalTabBrowser(QMainWindow):
         self.url_bar.returnPressed.connect(self.navigate_to_url)
         toolbar.addWidget(self.url_bar)
         
-        # Goボタン
+        # 検索/移動ボタン
         go_btn = QPushButton()
-        go_btn.setIcon(qta.icon('fa5s.search'))
+        go_btn.setIcon(qta.icon('fa5s.search', color='#0078d4'))
         go_btn.setToolTip("移動/検索")
+        go_btn.setFixedSize(32, 32)
         go_btn.clicked.connect(self.navigate_to_url)
         toolbar.addWidget(go_btn)
         
-        # WebViewコンテナ（複数のWebViewを切り替える）
+        # 設定ボタン
+        settings_btn = QPushButton()
+        settings_btn.setIcon(qta.icon('fa5s.cog', color='#666'))
+        settings_btn.setToolTip("設定")
+        settings_btn.setFixedSize(32, 32)
+        settings_btn.clicked.connect(self.show_about_dialog)
+        toolbar.addWidget(settings_btn)
+        
+        # WebViewコンテナ
         self.web_container = QWidget()
         self.web_layout = QVBoxLayout(self.web_container)
         self.web_layout.setContentsMargins(0, 0, 0, 0)
@@ -324,27 +592,27 @@ class VerticalTabBrowser(QMainWindow):
     
     def is_valid_url(self, text):
         """テキストが有効なURLかどうかを判定"""
-        # URLパターンのチェック
+        print("[INFO] TextCheck Start")
         url_pattern = re.compile(
-            r'^https?://'  # http:// or https://
-            r'|^www\.'      # www.で始まる
-            r'|^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'  # domain.com形式
+            r'^https?://'
+            r'|^www\.'
+            r'|^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'
         )
         
-        # スペースが含まれていたら検索クエリ
         if ' ' in text:
+            print("[INFO] TabControl: Text")
             return False
         
-        # URLパターンにマッチするか
         if url_pattern.match(text):
+            print("[INFO] TabControl: URL")
             return True
         
-        # ドット+TLD形式をチェック（例: example.com）
         if '.' in text and not text.startswith('.') and not text.endswith('.'):
             parts = text.split('.')
             if len(parts) >= 2 and len(parts[-1]) >= 2:
+                print("[INFO] TabControl: URL")
                 return True
-        
+        print("[INFO] TabControl: Text")
         return False
     
     def process_url_or_search(self, text):
@@ -352,40 +620,31 @@ class VerticalTabBrowser(QMainWindow):
         text = text.strip()
         
         if self.is_valid_url(text):
-            # URLとして処理
             if not text.startswith("http://") and not text.startswith("https://"):
                 text = "https://" + text
             return text
         else:
-            # Google検索として処理
             search_query = quote_plus(text)
             return f"https://www.google.com/search?q={search_query}"
     
     def add_new_tab(self, url, activate=True):
         """新しいタブを追加"""
-        # WebViewを作成
         web_view = QWebEngineView()
         
-        # カスタムページを設定
         page = CustomWebEnginePage(self.profile, web_view)
         page.new_tab_requested.connect(lambda url: self.add_new_tab(url.toString(), activate=True))
         web_view.setPage(page)
         
-        # URLを設定
         web_view.setUrl(QUrl(url))
         
-        # タイトル変更時のイベント接続
         web_view.titleChanged.connect(lambda title: self.update_tab_title(web_view, title))
         web_view.urlChanged.connect(lambda url: self.update_url_bar(web_view, url))
         
-        # タブアイテムを作成
         tab_item = TabItem("新しいタブ", web_view)
         
-        # タブリストに追加
         self.tab_list.addItem(tab_item)
         self.tabs.append(web_view)
         
-        # 新しいタブをアクティブにするか
         if activate:
             self.tab_list.setCurrentItem(tab_item)
     
@@ -394,20 +653,18 @@ class VerticalTabBrowser(QMainWindow):
         if current is None:
             return
         
-        # 既存のWebViewを全て非表示
         for i in reversed(range(self.web_layout.count())):
             widget = self.web_layout.itemAt(i).widget()
             if widget:
                 self.web_layout.removeWidget(widget)
                 widget.setParent(None)
+                print("[INFO] TabControl: Elected{i}")
         
-        # 選択されたタブのWebViewを表示
         tab_item = current
         web_view = tab_item.web_view
         self.web_layout.addWidget(web_view)
         web_view.show()
         
-        # URLバーを更新
         self.url_bar.setText(web_view.url().toString())
     
     def update_tab_title(self, web_view, title):
@@ -415,7 +672,6 @@ class VerticalTabBrowser(QMainWindow):
         for i in range(self.tab_list.count()):
             item = self.tab_list.item(i)
             if isinstance(item, TabItem) and item.web_view == web_view:
-                # タイトルが長い場合は切り詰める
                 display_title = title[:30] + "..." if len(title) > 30 else title
                 item.setText(display_title)
                 break
@@ -457,18 +713,24 @@ class VerticalTabBrowser(QMainWindow):
         """現在のタブを閉じる"""
         current_row = self.tab_list.currentRow()
         if current_row >= 0 and self.tab_list.count() > 1:
-            # タブアイテムとWebViewを削除
             item = self.tab_list.takeItem(current_row)
             if isinstance(item, TabItem):
                 item.web_view.deleteLater()
                 self.tabs.remove(item.web_view)
+                print("[INFO] TabControl: Close")
         elif self.tab_list.count() == 1:
-            # 最後のタブの場合は警告（コンソールに出力）
-            print("最後のタブは閉じられません")
+            print("[INFO] TabControl: Close(Exit)")
+            sys.exit(0)
 
 
 def main():
     app = QApplication(sys.argv)
+    
+    # アプリケーション全体のフォント設定
+    font = QFont()
+    font.setPointSize(9)
+    app.setFont(font)
+    
     browser = VerticalTabBrowser()
     browser.show()
     sys.exit(app.exec())
