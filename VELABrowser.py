@@ -30,28 +30,30 @@ from urllib.parse import quote_plus
 from urllib.request import urlopen
 from urllib.error import URLError
 from packaging import version
+from html import escape, unescape
 
-from PySide6.QtCore import Qt, QUrl, Signal, QThread, QSettings
+from PySide6.QtCore import Qt, QUrl, Signal, QThread, QSettings, QStandardPaths
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QHBoxLayout, QPushButton, QLineEdit, QListWidget,
     QListWidgetItem, QSplitter, QToolBar, QDialog,
     QTabWidget, QLabel, QTextEdit, QFrame, QMessageBox,
     QCheckBox, QSpinBox, QComboBox, QGroupBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QAbstractItemView
+    QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog,
+    QTreeWidget, QTreeWidgetItem, QProgressBar, QScrollArea
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings, QWebEngineDownloadRequest
 from PySide6.QtGui import QIcon, QAction, QFont
 import qtawesome as qta
 
 # ブラウザ情報
 BROWSER_NAME                = "VELA"
 BROWSER_CODENAME            = "Praxis"
-BROWSER_VERSION_SEMANTIC    = "2.0.0.0a5"  # セマンティックバージョン（比較用）
-BROWSER_VERSION_NAME        = "2.0.0.0 Alpha5" # バージョン名
+BROWSER_VERSION_SEMANTIC    = "2.0.0.0a6"
+BROWSER_VERSION_NAME        = "2.0.0.0 Alpha6"
 BROWSER_FULL_NAME           = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
-BROWSER_TARGET_Architecture = "win-x64" # linux-x64-debian / linux-x64-redhat / rasp-a64 / win-a64 / win-x64
+BROWSER_TARGET_Architecture = "win-x64" # linux-x64 / linux-a64 / rasp-a64 / win-x64 / win-a64 / mac-a64
 
 # 更新チェックURL
 UPDATE_CHECK_URL = f"https://abatbeliever.net/upd/VELABrowser/{BROWSER_CODENAME}/{BROWSER_TARGET_Architecture}.updat"
@@ -61,9 +63,13 @@ DATA_DIR = Path.home() / ".vela_browser"
 DATA_DIR.mkdir(exist_ok=True)
 HISTORY_DB = DATA_DIR / "history.db"
 SESSION_FILE = DATA_DIR / "session.json"
+BOOKMARKS_DB = DATA_DIR / "bookmarks.db"
+DOWNLOADS_DIR = DATA_DIR / "downloads"
+DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 print(BROWSER_FULL_NAME)
 print("\nCopyright (C) 2025-2026 ABATBeliever")
+print(f"Data Directory: {DATA_DIR}")
 
 
 class HistoryManager:
@@ -86,12 +92,8 @@ class HistoryManager:
                 visit_count INTEGER DEFAULT 1
             )
         ''')
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_url ON history(url)
-        ''')
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_visit_time ON history(visit_time DESC)
-        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_url ON history(url)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_visit_time ON history(visit_time DESC)')
         conn.commit()
         conn.close()
         print("[INFO] History database initialized")
@@ -104,22 +106,17 @@ class HistoryManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # 既存のエントリをチェック
         cursor.execute('SELECT id, visit_count FROM history WHERE url = ?', (url,))
         result = cursor.fetchone()
         
         if result:
-            # 既存エントリを更新
             cursor.execute('''
                 UPDATE history 
                 SET title = ?, visit_time = CURRENT_TIMESTAMP, visit_count = ?
                 WHERE id = ?
             ''', (title, result[1] + 1, result[0]))
         else:
-            # 新規エントリを追加
-            cursor.execute('''
-                INSERT INTO history (url, title) VALUES (?, ?)
-            ''', (url, title))
+            cursor.execute('INSERT INTO history (url, title) VALUES (?, ?)', (url, title))
         
         conn.commit()
         conn.close()
@@ -161,6 +158,159 @@ class HistoryManager:
         conn.commit()
         conn.close()
         print("[INFO] History cleared")
+
+
+class BookmarkManager:
+    """ブックマーク管理クラス"""
+    
+    def __init__(self):
+        self.db_path = BOOKMARKS_DB
+        self.init_database()
+    
+    def init_database(self):
+        """データベースの初期化"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL,
+                folder TEXT DEFAULT 'root',
+                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        print("[INFO] Bookmarks database initialized")
+    
+    def add_bookmark(self, title, url, folder='root'):
+        """ブックマークを追加"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO bookmarks (title, url, folder) VALUES (?, ?, ?)', 
+                      (title, url, folder))
+        conn.commit()
+        conn.close()
+        print(f"[INFO] Bookmark added: {title}")
+    
+    def get_bookmarks(self, folder=None):
+        """ブックマークを取得"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if folder:
+            cursor.execute('SELECT id, title, url, folder FROM bookmarks WHERE folder = ?', (folder,))
+        else:
+            cursor.execute('SELECT id, title, url, folder FROM bookmarks')
+        results = cursor.fetchall()
+        conn.close()
+        return results
+    
+    def get_folders(self):
+        """フォルダ一覧を取得"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT DISTINCT folder FROM bookmarks')
+        results = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return results
+    
+    def delete_bookmark(self, bookmark_id):
+        """ブックマークを削除"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM bookmarks WHERE id = ?', (bookmark_id,))
+        conn.commit()
+        conn.close()
+    
+    def export_html(self, filepath):
+        """HTML形式でエクスポート（Netscape Bookmark File Format）"""
+        bookmarks = self.get_bookmarks()
+        folders = {}
+        
+        for bm_id, title, url, folder in bookmarks:
+            if folder not in folders:
+                folders[folder] = []
+            folders[folder].append((title, url))
+        
+        html = []
+        html.append('<!DOCTYPE NETSCAPE-Bookmark-file-1>')
+        html.append('<!-- This is an automatically generated file.')
+        html.append('     It will be read and overwritten.')
+        html.append('     DO NOT EDIT! -->')
+        html.append('<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">')
+        html.append(f'<TITLE>Bookmarks - {BROWSER_FULL_NAME}</TITLE>')
+        html.append('<H1>Bookmarks</H1>')
+        html.append('<DL><p>')
+        
+        for folder, items in folders.items():
+            if folder != 'root':
+                html.append(f'    <DT><H3>{escape(folder)}</H3>')
+                html.append('    <DL><p>')
+            
+            for title, url in items:
+                html.append(f'        <DT><A HREF="{escape(url)}">{escape(title)}</A>')
+            
+            if folder != 'root':
+                html.append('    </DL><p>')
+        
+        html.append('</DL><p>')
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(html))
+        
+        print(f"[INFO] Bookmarks exported to {filepath}")
+    
+    def import_html(self, filepath):
+        """HTML形式でインポート"""
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 簡易パーサー
+            current_folder = 'root'
+            import re
+            
+            # H3タグからフォルダ名を抽出
+            h3_pattern = re.compile(r'<H3[^>]*>(.*?)</H3>', re.IGNORECASE)
+            # Aタグからブックマークを抽出
+            a_pattern = re.compile(r'<A\s+HREF="([^"]+)"[^>]*>(.*?)</A>', re.IGNORECASE)
+            
+            lines = content.split('\n')
+            for line in lines:
+                h3_match = h3_pattern.search(line)
+                if h3_match:
+                    current_folder = unescape(h3_match.group(1))
+                    continue
+                
+                a_match = a_pattern.search(line)
+                if a_match:
+                    url = unescape(a_match.group(1))
+                    title = unescape(a_match.group(2))
+                    self.add_bookmark(title, url, current_folder)
+            
+            print(f"[INFO] Bookmarks imported from {filepath}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to import bookmarks: {e}")
+            return False
+
+
+class DownloadManager:
+    """ダウンロード管理クラス"""
+    
+    def __init__(self):
+        self.downloads = []
+        self.download_items = {}
+    
+    def add_download(self, download_item):
+        """ダウンロードを追加"""
+        self.downloads.append(download_item)
+        print(f"[INFO] Download started: {download_item.downloadFileName()}")
+    
+    def get_downloads(self):
+        """ダウンロード一覧を取得"""
+        return self.downloads
 
 
 class SessionManager:
@@ -221,6 +371,245 @@ class UpdateChecker(QThread):
                     print("[INFO] UpdateCheck-> Latest")
         except Exception as e:
             print(f"[INFO] UpdateCheck Failed({e})")
+
+
+class DownloadDialog(QDialog):
+    """ダウンロードマネージャーダイアログ"""
+    
+    def __init__(self, download_manager, parent=None):
+        super().__init__(parent)
+        self.download_manager = download_manager
+        self.setWindowTitle("ダウンロードマネージャー")
+        self.setMinimumSize(700, 400)
+        self.init_ui()
+    
+    def init_ui(self):
+        """UIの初期化"""
+        layout = QVBoxLayout(self)
+        
+        # ダウンロード一覧
+        self.download_table = QTableWidget()
+        self.download_table.setColumnCount(4)
+        self.download_table.setHorizontalHeaderLabels(["ファイル名", "URL", "進捗", "状態"])
+        self.download_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.download_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.download_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        layout.addWidget(self.download_table)
+        
+        # ボタンエリア
+        button_layout = QHBoxLayout()
+        
+        refresh_btn = QPushButton("更新")
+        refresh_btn.clicked.connect(self.refresh_downloads)
+        button_layout.addWidget(refresh_btn)
+        
+        button_layout.addStretch()
+        
+        close_btn = QPushButton("閉じる")
+        close_btn.clicked.connect(self.close)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+        
+        self.refresh_downloads()
+    
+    def refresh_downloads(self):
+        """ダウンロード一覧を更新"""
+        downloads = self.download_manager.get_downloads()
+        self.download_table.setRowCount(len(downloads))
+        
+        for i, download in enumerate(downloads):
+            self.download_table.setItem(i, 0, QTableWidgetItem(download.downloadFileName()))
+            self.download_table.setItem(i, 1, QTableWidgetItem(download.url().toString()))
+            
+            # 進捗バー
+            progress = QProgressBar()
+            progress.setValue(int(download.receivedBytes() / max(download.totalBytes(), 1) * 100))
+            self.download_table.setCellWidget(i, 2, progress)
+            
+            # 状態
+            state_map = {
+                QWebEngineDownloadRequest.DownloadRequested: "要求中",
+                QWebEngineDownloadRequest.DownloadInProgress: "ダウンロード中",
+                QWebEngineDownloadRequest.DownloadCompleted: "完了",
+                QWebEngineDownloadRequest.DownloadCancelled: "キャンセル",
+                QWebEngineDownloadRequest.DownloadInterrupted: "中断"
+            }
+            state = state_map.get(download.state(), "不明")
+            self.download_table.setItem(i, 3, QTableWidgetItem(state))
+
+
+class BookmarkDialog(QDialog):
+    """ブックマークダイアログ"""
+    
+    open_url = Signal(str)
+    
+    def __init__(self, bookmark_manager, parent=None):
+        super().__init__(parent)
+        self.bookmark_manager = bookmark_manager
+        self.setWindowTitle("ブックマーク")
+        self.setMinimumSize(700, 500)
+        self.init_ui()
+        self.load_bookmarks()
+    
+    def init_ui(self):
+        """UIの初期化"""
+        layout = QVBoxLayout(self)
+        
+        # ツールバー
+        toolbar_layout = QHBoxLayout()
+        
+        add_btn = QPushButton("追加")
+        add_btn.clicked.connect(self.add_bookmark_dialog)
+        toolbar_layout.addWidget(add_btn)
+        
+        delete_btn = QPushButton("削除")
+        delete_btn.clicked.connect(self.delete_selected_bookmark)
+        toolbar_layout.addWidget(delete_btn)
+        
+        toolbar_layout.addStretch()
+        
+        export_btn = QPushButton("エクスポート")
+        export_btn.clicked.connect(self.export_bookmarks)
+        toolbar_layout.addWidget(export_btn)
+        
+        import_btn = QPushButton("インポート")
+        import_btn.clicked.connect(self.import_bookmarks)
+        toolbar_layout.addWidget(import_btn)
+        
+        layout.addLayout(toolbar_layout)
+        
+        # ブックマークツリー
+        self.bookmark_tree = QTreeWidget()
+        self.bookmark_tree.setHeaderLabels(["タイトル", "URL"])
+        self.bookmark_tree.setColumnWidth(0, 300)
+        self.bookmark_tree.itemDoubleClicked.connect(self.on_item_double_clicked)
+        layout.addWidget(self.bookmark_tree)
+        
+        # 閉じるボタン
+        close_btn = QPushButton("閉じる")
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
+    
+    def load_bookmarks(self):
+        """ブックマークを読み込み"""
+        self.bookmark_tree.clear()
+        folders = {}
+        
+        bookmarks = self.bookmark_manager.get_bookmarks()
+        
+        for bm_id, title, url, folder in bookmarks:
+            if folder not in folders:
+                folder_item = QTreeWidgetItem(self.bookmark_tree, [folder, ""])
+                folder_item.setData(0, Qt.UserRole, {"type": "folder", "name": folder})
+                folders[folder] = folder_item
+            
+            bookmark_item = QTreeWidgetItem(folders[folder], [title, url])
+            bookmark_item.setData(0, Qt.UserRole, {"type": "bookmark", "id": bm_id, "url": url})
+        
+        self.bookmark_tree.expandAll()
+    
+    def add_bookmark_dialog(self):
+        """ブックマーク追加ダイアログ"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("ブックマークを追加")
+        layout = QVBoxLayout(dialog)
+        
+        # タイトル
+        title_layout = QHBoxLayout()
+        title_layout.addWidget(QLabel("タイトル:"))
+        title_input = QLineEdit()
+        title_layout.addWidget(title_input)
+        layout.addLayout(title_layout)
+        
+        # URL
+        url_layout = QHBoxLayout()
+        url_layout.addWidget(QLabel("URL:"))
+        url_input = QLineEdit()
+        url_layout.addWidget(url_input)
+        layout.addLayout(url_layout)
+        
+        # フォルダ
+        folder_layout = QHBoxLayout()
+        folder_layout.addWidget(QLabel("フォルダ:"))
+        folder_combo = QComboBox()
+        folders = self.bookmark_manager.get_folders()
+        if not folders:
+            folders = ['root']
+        folder_combo.addItems(folders)
+        folder_layout.addWidget(folder_combo)
+        layout.addLayout(folder_layout)
+        
+        # ボタン
+        button_layout = QHBoxLayout()
+        add_btn = QPushButton("追加")
+        add_btn.clicked.connect(lambda: self.add_bookmark(
+            title_input.text(), 
+            url_input.text(), 
+            folder_combo.currentText(),
+            dialog
+        ))
+        button_layout.addWidget(add_btn)
+        
+        cancel_btn = QPushButton("キャンセル")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        dialog.exec()
+    
+    def add_bookmark(self, title, url, folder, dialog):
+        """ブックマークを追加"""
+        if title and url:
+            self.bookmark_manager.add_bookmark(title, url, folder)
+            self.load_bookmarks()
+            dialog.accept()
+    
+    def delete_selected_bookmark(self):
+        """選択中のブックマークを削除"""
+        current_item = self.bookmark_tree.currentItem()
+        if current_item:
+            data = current_item.data(0, Qt.UserRole)
+            if data and data["type"] == "bookmark":
+                reply = QMessageBox.question(
+                    self, "確認", "このブックマークを削除しますか？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    self.bookmark_manager.delete_bookmark(data["id"])
+                    self.load_bookmarks()
+    
+    def on_item_double_clicked(self, item, column):
+        """アイテムダブルクリック時"""
+        data = item.data(0, Qt.UserRole)
+        if data and data["type"] == "bookmark":
+            self.open_url.emit(data["url"])
+            self.close()
+    
+    def export_bookmarks(self):
+        """ブックマークをエクスポート"""
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "ブックマークをエクスポート", 
+            str(DATA_DIR / "bookmarks.html"),
+            "HTML Files (*.html)"
+        )
+        if filepath:
+            self.bookmark_manager.export_html(filepath)
+            QMessageBox.information(self, "完了", "ブックマークをエクスポートしました。")
+    
+    def import_bookmarks(self):
+        """ブックマークをインポート"""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "ブックマークをインポート",
+            str(Path.home()),
+            "HTML Files (*.html)"
+        )
+        if filepath:
+            if self.bookmark_manager.import_html(filepath):
+                self.load_bookmarks()
+                QMessageBox.information(self, "完了", "ブックマークをインポートしました。")
+            else:
+                QMessageBox.warning(self, "エラー", "ブックマークのインポートに失敗しました。")
 
 
 class HistoryDialog(QDialog):
@@ -315,8 +704,9 @@ class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{BROWSER_NAME}について")
-        self.setMinimumSize(700, 600)
+        self.setMinimumSize(600, 500)  # Alpha4と同じサイズ
         self.settings = QSettings("ABATBeliever", "VELA")
+        self.settings_file = DATA_DIR / "settings.ini"
         self.init_ui()
     
     def init_ui(self):
@@ -428,17 +818,21 @@ class AboutDialog(QDialog):
         return widget
     
     def create_settings_tab(self):
-        """設定タブ（UI仮組み）"""
+        """設定タブ（スクロール対応）"""
+        # スクロールエリア
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         
         # 一般設定グループ
         general_group = QGroupBox("一般設定")
         general_layout = QVBoxLayout()
         
-        # ホームページ設定
         homepage_layout = QHBoxLayout()
         homepage_layout.addWidget(QLabel("ホームページ:"))
         self.homepage_input = QLineEdit()
@@ -446,7 +840,6 @@ class AboutDialog(QDialog):
         homepage_layout.addWidget(self.homepage_input)
         general_layout.addLayout(homepage_layout)
         
-        # 起動時の動作
         startup_layout = QHBoxLayout()
         startup_layout.addWidget(QLabel("起動時:"))
         self.startup_combo = QComboBox()
@@ -455,7 +848,6 @@ class AboutDialog(QDialog):
         startup_layout.addWidget(self.startup_combo)
         general_layout.addLayout(startup_layout)
         
-        # セッション保存
         self.save_session_check = QCheckBox("終了時にセッションを保存")
         self.save_session_check.setChecked(self.settings.value("save_session", True, type=bool))
         general_layout.addWidget(self.save_session_check)
@@ -493,6 +885,28 @@ class AboutDialog(QDialog):
         privacy_group.setLayout(privacy_layout)
         layout.addWidget(privacy_group)
         
+        # ダウンロード設定グループ
+        download_group = QGroupBox("ダウンロード設定")
+        download_layout = QVBoxLayout()
+        
+        download_dir_layout = QHBoxLayout()
+        download_dir_layout.addWidget(QLabel("保存先:"))
+        self.download_dir_input = QLineEdit()
+        self.download_dir_input.setText(self.settings.value("download_dir", str(DOWNLOADS_DIR)))
+        download_dir_layout.addWidget(self.download_dir_input)
+        
+        browse_btn = QPushButton("参照")
+        browse_btn.clicked.connect(self.browse_download_dir)
+        download_dir_layout.addWidget(browse_btn)
+        download_layout.addLayout(download_dir_layout)
+        
+        self.ask_download_check = QCheckBox("ダウンロード時に保存場所を確認")
+        self.ask_download_check.setChecked(self.settings.value("ask_download", True, type=bool))
+        download_layout.addWidget(self.ask_download_check)
+        
+        download_group.setLayout(download_layout)
+        layout.addWidget(download_group)
+        
         # 外観設定グループ
         appearance_group = QGroupBox("外観設定")
         appearance_layout = QVBoxLayout()
@@ -526,8 +940,40 @@ class AboutDialog(QDialog):
         self.fullscreen_check.setChecked(self.settings.value("allow_fullscreen", True, type=bool))
         advanced_layout.addWidget(self.fullscreen_check)
         
+        self.images_check = QCheckBox("画像を自動的に読み込む")
+        self.images_check.setChecked(self.settings.value("auto_load_images", True, type=bool))
+        advanced_layout.addWidget(self.images_check)
+        
         advanced_group.setLayout(advanced_layout)
         layout.addWidget(advanced_group)
+        
+        # UserAgent設定グループ
+        useragent_group = QGroupBox("UserAgent設定")
+        useragent_layout = QVBoxLayout()
+        
+        ua_preset_layout = QHBoxLayout()
+        ua_preset_layout.addWidget(QLabel("プリセット:"))
+        self.ua_preset_combo = QComboBox()
+        self.ua_preset_combo.addItems([
+            "デフォルト (Chrome/Windows)",
+            "Firefox/Windows",
+            "Safari/macOS",
+            "Chrome/Android",
+            "Safari/iOS",
+            "カスタム"
+        ])
+        self.ua_preset_combo.setCurrentIndex(self.settings.value("ua_preset", 0, type=int))
+        self.ua_preset_combo.currentIndexChanged.connect(self.on_ua_preset_changed)
+        ua_preset_layout.addWidget(self.ua_preset_combo)
+        useragent_layout.addLayout(ua_preset_layout)
+        
+        self.ua_custom_input = QLineEdit()
+        self.ua_custom_input.setPlaceholderText("カスタムUserAgentを入力")
+        self.ua_custom_input.setText(self.settings.value("ua_custom", ""))
+        useragent_layout.addWidget(self.ua_custom_input)
+        
+        useragent_group.setLayout(useragent_layout)
+        layout.addWidget(useragent_group)
         
         # 保存ボタン
         save_btn = QPushButton("設定を保存")
@@ -546,7 +992,35 @@ class AboutDialog(QDialog):
         layout.addWidget(save_btn)
         
         layout.addStretch()
-        return widget
+        
+        scroll_area.setWidget(widget)
+        return scroll_area
+    
+    def browse_download_dir(self):
+        """ダウンロードディレクトリを選択"""
+        directory = QFileDialog.getExistingDirectory(
+            self, "ダウンロードフォルダを選択",
+            self.download_dir_input.text()
+        )
+        if directory:
+            self.download_dir_input.setText(directory)
+    
+    def on_ua_preset_changed(self, index):
+        """UserAgentプリセット変更時"""
+        presets = {
+            0: "",  # デフォルト
+            1: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+            2: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
+            3: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.5615.135 Mobile Safari/537.36",
+            4: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
+            5: self.ua_custom_input.text()  # カスタム
+        }
+        
+        if index < 5:
+            self.ua_custom_input.setEnabled(False)
+            self.ua_custom_input.setPlaceholderText(presets.get(index, ""))
+        else:
+            self.ua_custom_input.setEnabled(True)
     
     def save_settings(self):
         """設定を保存"""
@@ -556,10 +1030,18 @@ class AboutDialog(QDialog):
         self.settings.setValue("search_engine", self.search_engine_combo.currentIndex())
         self.settings.setValue("do_not_track", self.do_not_track_check.isChecked())
         self.settings.setValue("clear_on_exit", self.clear_on_exit_check.isChecked())
+        self.settings.setValue("download_dir", self.download_dir_input.text())
+        self.settings.setValue("ask_download", self.ask_download_check.isChecked())
         self.settings.setValue("default_zoom", self.zoom_spin.value())
         self.settings.setValue("enable_javascript", self.javascript_check.isChecked())
         self.settings.setValue("enable_plugins", self.plugins_check.isChecked())
         self.settings.setValue("allow_fullscreen", self.fullscreen_check.isChecked())
+        self.settings.setValue("auto_load_images", self.images_check.isChecked())
+        self.settings.setValue("ua_preset", self.ua_preset_combo.currentIndex())
+        self.settings.setValue("ua_custom", self.ua_custom_input.text())
+        
+        # 設定ファイルにも保存（バックアップ）
+        self.settings.sync()
         
         QMessageBox.information(self, "保存完了", "設定を保存しました。\n一部の設定は再起動後に反映されます。")
 
@@ -571,7 +1053,7 @@ class CustomWebEnginePage(QWebEnginePage):
     
     def __init__(self, profile, parent=None):
         super().__init__(profile, parent)
-        
+    
     def createWindow(self, window_type):
         """新しいウィンドウ/タブが要求された時の処理"""
         print("[INFO] TabControl: Add")
@@ -597,19 +1079,75 @@ class VerticalTabBrowser(QMainWindow):
         self.tabs = []
         self.profile = QWebEngineProfile.defaultProfile()
         self.history_manager = HistoryManager()
+        self.bookmark_manager = BookmarkManager()
+        self.download_manager = DownloadManager()
         self.session_manager = SessionManager()
         self.settings = QSettings("ABATBeliever", "VELA")
         
-        # WebEngineの設定
-        web_settings = self.profile.settings()
-        web_settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
-        web_settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
-        web_settings.setAttribute(QWebEngineSettings.PluginsEnabled, True)
-        
+        self.apply_settings()
         self.init_ui()
         self.check_for_updates()
         self.restore_session()
         
+    def apply_settings(self):
+        """設定を適用"""
+        web_settings = self.profile.settings()
+        
+        # 基本設定
+        web_settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, 
+                                 self.settings.value("allow_fullscreen", True, type=bool))
+        web_settings.setAttribute(QWebEngineSettings.JavascriptEnabled, 
+                                 self.settings.value("enable_javascript", True, type=bool))
+        web_settings.setAttribute(QWebEngineSettings.PluginsEnabled, 
+                                 self.settings.value("enable_plugins", True, type=bool))
+        web_settings.setAttribute(QWebEngineSettings.AutoLoadImages,
+                                 self.settings.value("auto_load_images", True, type=bool))
+        
+        # UserAgent設定
+        ua_preset = self.settings.value("ua_preset", 0, type=int)
+        if ua_preset > 0:
+            ua_strings = {
+                1: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+                2: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
+                3: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.5615.135 Mobile Safari/537.36",
+                4: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
+                5: self.settings.value("ua_custom", "")
+            }
+            ua = ua_strings.get(ua_preset, "")
+            if ua:
+                self.profile.setHttpUserAgent(ua)
+                print(f"[INFO] UserAgent set to preset {ua_preset}")
+        
+        # ダウンロード設定
+        self.profile.downloadRequested.connect(self.on_download_requested)
+        
+        print("[INFO] Settings applied")
+    
+    def on_download_requested(self, download):
+        """ダウンロード要求時の処理"""
+        print(f"[INFO] Download requested: {download.downloadFileName()}")
+        
+        # ダウンロード先を設定
+        download_dir = Path(self.settings.value("download_dir", str(DOWNLOADS_DIR)))
+        download_dir.mkdir(parents=True, exist_ok=True)
+        
+        if self.settings.value("ask_download", True, type=bool):
+            filepath, _ = QFileDialog.getSaveFileName(
+                self,
+                "ファイルを保存",
+                str(download_dir / download.downloadFileName()),
+                "All Files (*)"
+            )
+            if filepath:
+                download.setDownloadDirectory(str(Path(filepath).parent))
+                download.setDownloadFileName(Path(filepath).name)
+                download.accept()
+                self.download_manager.add_download(download)
+        else:
+            download.setDownloadDirectory(str(download_dir))
+            download.accept()
+            self.download_manager.add_download(download)
+    
     def init_ui(self):
         """UIの初期化"""
         self.setWindowTitle(f"{BROWSER_FULL_NAME}")
@@ -655,16 +1193,23 @@ class VerticalTabBrowser(QMainWindow):
     
     def restore_session(self):
         """セッションを復元"""
-        if self.settings.value("save_session", True, type=bool):
+        startup_action = self.settings.value("startup_action", 0, type=int)
+        
+        if startup_action == 0 and self.settings.value("save_session", True, type=bool):
+            # 前回のセッションを復元
             tabs_data = self.session_manager.load_session()
             if tabs_data:
                 for i, tab_data in enumerate(tabs_data):
-                    self.add_new_tab(tab_data.get("url", "https://www.google.com"), activate=(i == tab_data.get("active_index", 0)))
+                    self.add_new_tab(tab_data.get("url", "https://www.google.com"), 
+                                   activate=(i == tab_data.get("active_index", 0)))
                 return
         
-        # セッションがない場合はデフォルトタブを開く
-        homepage = self.settings.value("homepage", "https://www.google.com")
-        self.add_new_tab(homepage)
+        # ホームページまたは新しいタブを開く
+        if startup_action == 1:
+            homepage = self.settings.value("homepage", "https://www.google.com")
+            self.add_new_tab(homepage)
+        else:
+            self.add_new_tab("https://www.google.com")
     
     def save_current_session(self):
         """現在のセッションを保存"""
@@ -706,13 +1251,96 @@ class VerticalTabBrowser(QMainWindow):
     def show_about_dialog(self):
         """設定ダイアログ表示"""
         dialog = AboutDialog(self)
+        old_settings = {
+            "javascript": self.settings.value("enable_javascript", True, type=bool),
+            "plugins": self.settings.value("enable_plugins", True, type=bool),
+            "images": self.settings.value("auto_load_images", True, type=bool),
+            "ua_preset": self.settings.value("ua_preset", 0, type=int)
+        }
+        
         dialog.exec()
+        
+        # 設定が変更された場合は再適用
+        new_settings = {
+            "javascript": self.settings.value("enable_javascript", True, type=bool),
+            "plugins": self.settings.value("enable_plugins", True, type=bool),
+            "images": self.settings.value("auto_load_images", True, type=bool),
+            "ua_preset": self.settings.value("ua_preset", 0, type=int)
+        }
+        
+        if old_settings != new_settings:
+            self.apply_settings()
     
     def show_history_dialog(self):
         """履歴ダイアログ表示"""
         dialog = HistoryDialog(self.history_manager, self)
         dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
         dialog.exec()
+    
+    def show_bookmark_dialog(self):
+        """ブックマークダイアログ表示"""
+        dialog = BookmarkDialog(self.bookmark_manager, self)
+        dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
+        dialog.exec()
+    
+    def show_download_dialog(self):
+        """ダウンロードマネージャー表示"""
+        dialog = DownloadDialog(self.download_manager, self)
+        dialog.exec()
+    
+    def add_bookmark_from_current_tab(self):
+        """現在のタブをブックマークに追加"""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem):
+            url = current_item.web_view.url().toString()
+            title = current_item.web_view.title() or "無題"
+            
+            # 簡易ダイアログ
+            dialog = QDialog(self)
+            dialog.setWindowTitle("ブックマークに追加")
+            layout = QVBoxLayout(dialog)
+            
+            title_layout = QHBoxLayout()
+            title_layout.addWidget(QLabel("タイトル:"))
+            title_input = QLineEdit(title)
+            title_layout.addWidget(title_input)
+            layout.addLayout(title_layout)
+            
+            url_layout = QHBoxLayout()
+            url_layout.addWidget(QLabel("URL:"))
+            url_label = QLabel(url)
+            url_label.setWordWrap(True)
+            url_layout.addWidget(url_label)
+            layout.addLayout(url_layout)
+            
+            folder_layout = QHBoxLayout()
+            folder_layout.addWidget(QLabel("フォルダ:"))
+            folder_combo = QComboBox()
+            folders = self.bookmark_manager.get_folders()
+            if not folders:
+                folders = ['root']
+            folder_combo.addItems(folders)
+            folder_layout.addWidget(folder_combo)
+            layout.addLayout(folder_layout)
+            
+            button_layout = QHBoxLayout()
+            add_btn = QPushButton("追加")
+            add_btn.clicked.connect(lambda: (
+                self.bookmark_manager.add_bookmark(
+                    title_input.text(),
+                    url,
+                    folder_combo.currentText()
+                ),
+                dialog.accept()
+            ))
+            button_layout.addWidget(add_btn)
+            
+            cancel_btn = QPushButton("キャンセル")
+            cancel_btn.clicked.connect(dialog.reject)
+            button_layout.addWidget(cancel_btn)
+            
+            layout.addLayout(button_layout)
+            dialog.exec()
     
     def create_tab_list(self):
         """タブリスト作成"""
@@ -866,7 +1494,31 @@ class VerticalTabBrowser(QMainWindow):
         go_btn.clicked.connect(self.navigate_to_url)
         toolbar.addWidget(go_btn)
         
-        # 履歴ボタン追加
+        # ブックマーク追加ボタン
+        bookmark_add_btn = QPushButton()
+        bookmark_add_btn.setIcon(qta.icon('fa5s.star', color='#f4c430'))
+        bookmark_add_btn.setToolTip("ブックマークに追加")
+        bookmark_add_btn.setFixedSize(32, 32)
+        bookmark_add_btn.clicked.connect(self.add_bookmark_from_current_tab)
+        toolbar.addWidget(bookmark_add_btn)
+        
+        # ブックマークボタン
+        bookmark_btn = QPushButton()
+        bookmark_btn.setIcon(qta.icon('fa5s.bookmark', color='#666'))
+        bookmark_btn.setToolTip("ブックマーク")
+        bookmark_btn.setFixedSize(32, 32)
+        bookmark_btn.clicked.connect(self.show_bookmark_dialog)
+        toolbar.addWidget(bookmark_btn)
+        
+        # ダウンロードボタン
+        download_btn = QPushButton()
+        download_btn.setIcon(qta.icon('fa5s.download', color='#666'))
+        download_btn.setToolTip("ダウンロード")
+        download_btn.setFixedSize(32, 32)
+        download_btn.clicked.connect(self.show_download_dialog)
+        toolbar.addWidget(download_btn)
+        
+        # 履歴ボタン
         history_btn = QPushButton()
         history_btn.setIcon(qta.icon('fa5s.history', color='#666'))
         history_btn.setToolTip("履歴")
@@ -874,6 +1526,7 @@ class VerticalTabBrowser(QMainWindow):
         history_btn.clicked.connect(self.show_history_dialog)
         toolbar.addWidget(history_btn)
         
+        # 設定ボタン
         settings_btn = QPushButton()
         settings_btn.setIcon(qta.icon('fa5s.cog', color='#666'))
         settings_btn.setToolTip("設定")
@@ -888,26 +1541,35 @@ class VerticalTabBrowser(QMainWindow):
         
         return widget
     
+    def get_search_url(self, query):
+        """検索エンジンに応じた検索URLを取得"""
+        search_engine = self.settings.value("search_engine", 0, type=int)
+        encoded_query = quote_plus(query)
+        
+        search_urls = {
+            0: f"https://www.google.com/search?q={encoded_query}",
+            1: f"https://www.bing.com/search?q={encoded_query}",
+            2: f"https://duckduckgo.com/?q={encoded_query}",
+            3: f"https://search.yahoo.co.jp/search?p={encoded_query}"
+        }
+        
+        return search_urls.get(search_engine, search_urls[0])
+    
     def is_valid_url(self, text):
         """URL判定"""
-        print("[INFO] TextCheck Start")
         url_pattern = re.compile(r'^https?://|^www\.|^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}')
         
         if ' ' in text:
-            print("[INFO] TextCheck: Text")
             return False
         
         if url_pattern.match(text):
-            print("[INFO] TextCheck: URL")
             return True
         
         if '.' in text and not text.startswith('.') and not text.endswith('.'):
             parts = text.split('.')
             if len(parts) >= 2 and len(parts[-1]) >= 2:
-                print("[INFO] TextCheck: URL")
                 return True
         
-        print("[INFO] TextCheck: Text")
         return False
     
     def process_url_or_search(self, text):
@@ -919,17 +1581,18 @@ class VerticalTabBrowser(QMainWindow):
                 text = "https://" + text
             return text
         else:
-            search_query = quote_plus(text)
-            return f"https://www.google.com/search?q={search_query}"
+            return self.get_search_url(text)
     
     def add_new_tab(self, url, activate=True):
         """新規タブ追加"""
         web_view = QWebEngineView()
         
+        # デフォルトズームを適用
+        default_zoom = self.settings.value("default_zoom", 100, type=int)
+        web_view.setZoomFactor(default_zoom / 100.0)
+        
         page = CustomWebEnginePage(self.profile, web_view)
         page.new_tab_requested.connect(lambda url: self.add_new_tab(url.toString(), activate=True))
-        
-        # 全画面表示のサポート
         page.fullScreenRequested.connect(self.handle_fullscreen_request)
         
         web_view.setPage(page)
@@ -952,7 +1615,6 @@ class VerticalTabBrowser(QMainWindow):
         if request.toggleOn():
             print("[INFO] Fullscreen: ON")
             request.accept()
-            # 全画面表示時の処理
         else:
             print("[INFO] Fullscreen: OFF")
             request.accept()
@@ -1040,7 +1702,6 @@ class VerticalTabBrowser(QMainWindow):
         """終了時の処理"""
         self.save_current_session()
         
-        # 終了時に履歴を削除する設定の場合
         if self.settings.value("clear_on_exit", False, type=bool):
             self.history_manager.clear_history()
         
