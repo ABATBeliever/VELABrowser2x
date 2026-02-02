@@ -42,7 +42,7 @@ VELA（Vital Environment for Liberty Access）は、PySide6 と QtWebEngine を�
 |-------------------------|---------------|------|
 | Windows 11 以降          | x64           |対応済|
 | Linux 系                 | x64           |対応済|
-| Raspberry Pi Trixie 以降 | aarch64       |対応済|
+| Raspberry Pi Trixie 以降 | aarch64       |x|
 | macOS | aarch64       |サードパーティによる対応|
 
 ※arm版Windows、macOS、及びLinuxは今後対応予定です
