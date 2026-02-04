@@ -17,7 +17,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtWebEngineCore import QWebEngineDownloadRequest
 
-from constants import STYLES, BROWSER_NAME, BROWSER_FULL_NAME, BROWSER_TARGET_Architecture, DATA_DIR, DOWNLOADS_DIR
+from constants import (
+    STYLES, BROWSER_NAME, BROWSER_FULL_NAME, BROWSER_TARGET_Architecture, 
+    DATA_DIR, DOWNLOADS_DIR, USER_AGENT_PRESETS, USER_AGENT_PRESET_NAMES
+)
 
 
 # =====================================================================
@@ -128,14 +131,15 @@ class AddBookmarkDialog(QDialog):
 # =====================================================================
 
 class MainDialog(QDialog):
-    """メインダイアログ（ブラウザについて・設定・履歴・ブックマーク統合）"""
+    """メインダイアログ（ブラウザについて・設定・履歴・ブックマーク・ダウンロード統合）"""
     
     open_url = Signal(str)
     
-    def __init__(self, history_manager, bookmark_manager, parent=None):
+    def __init__(self, history_manager, bookmark_manager, download_manager, parent=None):
         super().__init__(parent)
         self.history_manager = history_manager
         self.bookmark_manager = bookmark_manager
+        self.download_manager = download_manager
         self.setWindowTitle(f"{BROWSER_NAME}について")
         self.setMinimumSize(600, 500)
         
@@ -151,15 +155,16 @@ class MainDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         
         # タブウィジェット
-        tab_widget = QTabWidget()
-        tab_widget.setStyleSheet(STYLES['tab_widget'])
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet(STYLES['tab_widget'])
         
-        tab_widget.addTab(self.create_about_tab(), "ブラウザについて")
-        tab_widget.addTab(self.create_settings_tab(), "設定")
-        tab_widget.addTab(self.create_history_tab(), "閲覧履歴")
-        tab_widget.addTab(self.create_bookmarks_tab(), "ブックマーク")
+        self.tab_widget.addTab(self.create_about_tab(), "ブラウザについて")
+        self.tab_widget.addTab(self.create_settings_tab(), "設定")
+        self.tab_widget.addTab(self.create_history_tab(), "閲覧履歴")
+        self.tab_widget.addTab(self.create_bookmarks_tab(), "ブックマーク")
+        self.tab_widget.addTab(self.create_downloads_tab(), "ダウンロード")
         
-        layout.addWidget(tab_widget)
+        layout.addWidget(self.tab_widget)
         
         # 閉じるボタン
         button_layout = QHBoxLayout()
@@ -179,27 +184,29 @@ class MainDialog(QDialog):
         widget = QVBoxLayout()
         container = QWidget()
         container.setLayout(widget)
+        container.setStyleSheet("background-color: #ffffff;")
         
         widget.setContentsMargins(30, 30, 30, 30)
         widget.setSpacing(20)
         
         from constants import BROWSER_VERSION_NAME
         
-        title_label = QLabel(f"<h1>{BROWSER_NAME} Praxis</h1>")
+        title_label = QLabel(f"<h1 style='color: #333333;'>{BROWSER_NAME} Praxis</h1>")
         title_label.setAlignment(Qt.AlignCenter)
         widget.addWidget(title_label)
         
-        version_label = QLabel(f"<h3>バージョン: {BROWSER_VERSION_NAME}</h3>")
+        version_label = QLabel(f"<h3 style='color: #333333;'>バージョン: {BROWSER_VERSION_NAME}</h3>")
         version_label.setAlignment(Qt.AlignCenter)
         widget.addWidget(version_label)
         
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setFrameShadow(QFrame.Sunken)
+        line.setStyleSheet("background-color: #e0e0e0;")
         widget.addWidget(line)
         
         description = QLabel(
-            f"<p style='font-size: 11pt;'>{BROWSER_NAME}は、左側に縦タブを配置した<br>"
+            f"<p style='font-size: 11pt; color: #333333;'>{BROWSER_NAME}は、左側に縦タブを配置した<br>"
             "シンプルで使いやすいWebブラウザです。</p>"
         )
         description.setAlignment(Qt.AlignCenter)
@@ -208,6 +215,15 @@ class MainDialog(QDialog):
         tech_info = QTextEdit()
         tech_info.setReadOnly(True)
         tech_info.setMaximumHeight(120)
+        tech_info.setStyleSheet("""
+            QTextEdit {
+                background-color: #f9f9f9;
+                color: #333333;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
         
         from PySide6 import __version__ as pyside_version
         from PySide6.QtCore import qVersion
@@ -215,15 +231,14 @@ class MainDialog(QDialog):
         tech_text = f"""• フレームワーク: PySide6 {pyside_version}
 • Qt バージョン: {qVersion()}
 • Python バージョン: {sys.version.split()[0]}
-• エンジン: QtWebEngine (Chromium ベース)
-• アーキテクチャ: {BROWSER_TARGET_Architecture}
-• データディレクトリ: {DATA_DIR}
-"""
+• エンジン: QtWebEngine (Chromium)
+• 検出アーキテクチャ: {BROWSER_TARGET_Architecture}
+• データディレクトリ: {DATA_DIR}"""
         tech_info.setPlainText(tech_text)
         widget.addWidget(tech_info)
         
         copyright_label = QLabel(
-            "<p style='color: #666; font-size: 9pt;'>"
+            "<p style='color: #666666; font-size: 9pt;'>"
             "© 2025-2026, ABATBeliever.<br>"
             "Under LGPL v3 License"
             "</p>"
@@ -370,14 +385,7 @@ class MainDialog(QDialog):
         ua_preset_layout = QHBoxLayout()
         ua_preset_layout.addWidget(QLabel("プリセット:"))
         self.ua_preset_combo = QComboBox()
-        self.ua_preset_combo.addItems([
-            "デフォルト (Chrome/Windows)",
-            "Firefox/Windows",
-            "Safari/macOS",
-            "Chrome/Android",
-            "Safari/iOS",
-            "カスタム"
-        ])
+        self.ua_preset_combo.addItems(USER_AGENT_PRESET_NAMES)
         self.ua_preset_combo.setCurrentIndex(self.settings.value("ua_preset", 0, type=int))
         self.ua_preset_combo.currentIndexChanged.connect(self.on_ua_preset_changed)
         ua_preset_layout.addWidget(self.ua_preset_combo)
@@ -485,18 +493,9 @@ class MainDialog(QDialog):
             self.download_dir_input.setText(directory)
     
     def on_ua_preset_changed(self, index):
-        presets = {
-            0: "",
-            1: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
-            2: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
-            3: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.5615.135 Mobile Safari/537.36",
-            4: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
-            5: self.ua_custom_input.text()
-        }
-        
         if index < 5:
             self.ua_custom_input.setEnabled(False)
-            self.ua_custom_input.setPlaceholderText(presets.get(index, ""))
+            self.ua_custom_input.setPlaceholderText(USER_AGENT_PRESETS.get(index, ""))
         else:
             self.ua_custom_input.setEnabled(True)
     
@@ -519,7 +518,7 @@ class MainDialog(QDialog):
         
         self.settings.sync()
         
-        QMessageBox.information(self, "保存完了", "設定を保存しました。\n一部の設定は再起動後に反映されます。")
+        QMessageBox.information(self, "保存完了", "設定を保存しました。")
     
     def load_history(self):
         history = self.history_manager.get_history(500)
@@ -613,6 +612,144 @@ class MainDialog(QDialog):
                 QMessageBox.information(self, "完了", "ブックマークをインポートしました。")
             else:
                 QMessageBox.warning(self, "エラー", "ブックマークのインポートに失敗しました。")
+    
+    def create_downloads_tab(self):
+        """ダウンロードタブ"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # 説明ラベル
+        info_label = QLabel("現在のダウンロードと過去のダウンロード履歴を表示します。")
+        layout.addWidget(info_label)
+        
+        # ダウンロードテーブル
+        self.download_table = QTableWidget()
+        self.download_table.setColumnCount(6)
+        self.download_table.setHorizontalHeaderLabels([
+            "ファイル名", "URL", "保存先", "サイズ", "進捗", "状態"
+        ])
+        self.download_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.download_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.download_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.download_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.download_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        layout.addWidget(self.download_table)
+        
+        # ボタン群
+        button_layout = QHBoxLayout()
+        
+        refresh_btn = QPushButton("更新")
+        refresh_btn.setStyleSheet(STYLES['button_secondary'])
+        refresh_btn.clicked.connect(self.load_downloads)
+        button_layout.addWidget(refresh_btn)
+        
+        clear_history_btn = QPushButton("履歴をクリア")
+        clear_history_btn.setStyleSheet(STYLES['button_secondary'])
+        clear_history_btn.clicked.connect(self.clear_download_history)
+        button_layout.addWidget(clear_history_btn)
+        
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+        
+        # 初期データ読み込み
+        self.load_downloads()
+        
+        return widget
+    
+    def load_downloads(self):
+        """ダウンロードデータを読み込み"""
+        # 現在進行中のダウンロード
+        current_downloads = self.download_manager.get_downloads()
+        
+        # 過去のダウンロード履歴
+        download_history = self.download_manager.get_download_history(100)
+        
+        # テーブルをクリア
+        self.download_table.setRowCount(0)
+        
+        # 現在のダウンロードを表示
+        for download in current_downloads:
+            row = self.download_table.rowCount()
+            self.download_table.insertRow(row)
+            
+            self.download_table.setItem(row, 0, QTableWidgetItem(download.downloadFileName()))
+            self.download_table.setItem(row, 1, QTableWidgetItem(download.url().toString()))
+            self.download_table.setItem(row, 2, QTableWidgetItem(download.downloadDirectory()))
+            
+            total_bytes = download.totalBytes()
+            if total_bytes > 0:
+                size_mb = total_bytes / (1024 * 1024)
+                self.download_table.setItem(row, 3, QTableWidgetItem(f"{size_mb:.2f} MB"))
+            else:
+                self.download_table.setItem(row, 3, QTableWidgetItem("不明"))
+            
+            # 進捗バー
+            progress = QProgressBar()
+            if total_bytes > 0:
+                progress.setValue(int(download.receivedBytes() / total_bytes * 100))
+            else:
+                progress.setValue(0)
+            self.download_table.setCellWidget(row, 4, progress)
+            
+            # 状態
+            state_map = {
+                QWebEngineDownloadRequest.DownloadRequested: "要求中",
+                QWebEngineDownloadRequest.DownloadInProgress: "ダウンロード中",
+                QWebEngineDownloadRequest.DownloadCompleted: "完了",
+                QWebEngineDownloadRequest.DownloadCancelled: "キャンセル",
+                QWebEngineDownloadRequest.DownloadInterrupted: "中断"
+            }
+            state = state_map.get(download.state(), "不明")
+            self.download_table.setItem(row, 5, QTableWidgetItem(state))
+        
+        # 過去のダウンロード履歴を表示
+        for filename, url, download_path, total_bytes, received_bytes, state, start_time, finish_time in download_history:
+            row = self.download_table.rowCount()
+            self.download_table.insertRow(row)
+            
+            self.download_table.setItem(row, 0, QTableWidgetItem(filename))
+            self.download_table.setItem(row, 1, QTableWidgetItem(url))
+            self.download_table.setItem(row, 2, QTableWidgetItem(download_path or ""))
+            
+            if total_bytes > 0:
+                size_mb = total_bytes / (1024 * 1024)
+                self.download_table.setItem(row, 3, QTableWidgetItem(f"{size_mb:.2f} MB"))
+            else:
+                self.download_table.setItem(row, 3, QTableWidgetItem("不明"))
+            
+            # 進捗
+            if total_bytes > 0:
+                progress_pct = int(received_bytes / total_bytes * 100)
+                self.download_table.setItem(row, 4, QTableWidgetItem(f"{progress_pct}%"))
+            else:
+                self.download_table.setItem(row, 4, QTableWidgetItem("0%"))
+            
+            # 状態（DBから）
+            state_map = {
+                0: "要求中",
+                1: "ダウンロード中",
+                2: "完了",
+                3: "キャンセル",
+                4: "中断"
+            }
+            state_text = state_map.get(state, "不明")
+            self.download_table.setItem(row, 5, QTableWidgetItem(state_text))
+    
+    def clear_download_history(self):
+        """ダウンロード履歴をクリア"""
+        reply = QMessageBox.question(
+            self, "確認", "ダウンロード履歴を全て削除しますか？\n（現在進行中のダウンロードは保持されます）",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.download_manager.clear_download_history()
+            self.load_downloads()
+            QMessageBox.information(self, "完了", "ダウンロード履歴をクリアしました。")
+    
+    def show_download_tab(self):
+        """ダウンロードタブを表示"""
+        self.tab_widget.setCurrentIndex(4)  # ダウンロードタブ（5番目）を選択
 
 
 # =====================================================================

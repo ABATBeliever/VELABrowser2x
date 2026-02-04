@@ -1,6 +1,6 @@
 """
 VELA Browser - メインブラウザウィンドウ
-縦タブブラウザの実装
+縦タブブラウザの実装、カスタムWebEnginePage、タブアイテム
 """
 
 import re
@@ -11,17 +11,55 @@ from PySide6.QtCore import Qt, QUrl, QSettings
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLineEdit, QListWidget, QSplitter, QToolBar, QMessageBox,
-    QFileDialog
+    QFileDialog, QApplication
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
 from PySide6.QtGui import QFont
 import qtawesome as qta
 
-from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR
+from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR, USER_AGENT_PRESETS
 from managers import HistoryManager, BookmarkManager, DownloadManager, SessionManager, UpdateChecker
-from webengine import CustomWebEnginePage, TabItem
-from dialogs import AddBookmarkDialog, MainDialog, DownloadDialog
+from dialogs import AddBookmarkDialog, MainDialog
+
+
+from PySide6.QtCore import QUrl, Signal
+from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWidgets import QListWidgetItem
+
+
+# =====================================================================
+# カスタムWebEnginePage
+# =====================================================================
+
+class CustomWebEnginePage(QWebEnginePage):
+    """新しいウィンドウ/タブの処理をカスタマイズしたWebEnginePage"""
+    
+    new_tab_requested = Signal(QUrl)
+    
+    def __init__(self, profile, parent=None):
+        super().__init__(profile, parent)
+    
+    def createWindow(self, window_type):
+        """新しいウィンドウ/タブが要求された時の処理"""
+        print("[INFO] TabControl: Add")
+        page = CustomWebEnginePage(self.profile(), self.parent())
+        page.new_tab_requested.connect(self.new_tab_requested.emit)
+        page.urlChanged.connect(lambda url: self.new_tab_requested.emit(url))
+        return page
+
+
+# =====================================================================
+# タブアイテム
+# =====================================================================
+
+class TabItem(QListWidgetItem):
+    """タブを表すリストアイテム"""
+    
+    def __init__(self, title, web_view):
+        super().__init__(title)
+        self.web_view = web_view
+        self.url = web_view.url()
 
 
 # =====================================================================
@@ -62,14 +100,11 @@ class VerticalTabBrowser(QMainWindow):
         # UserAgent設定
         ua_preset = self.settings.value("ua_preset", 0, type=int)
         if ua_preset > 0:
-            ua_strings = {
-                1: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
-                2: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
-                3: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.5615.135 Mobile Safari/537.36",
-                4: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
-                5: self.settings.value("ua_custom", "")
-            }
-            ua = ua_strings.get(ua_preset, "")
+            if ua_preset == 5:
+                ua = self.settings.value("ua_custom", "")
+            else:
+                ua = USER_AGENT_PRESETS.get(ua_preset, "")
+            
             if ua:
                 self.profile.setHttpUserAgent(ua)
                 print(f"[INFO] UserAgent set to preset {ua_preset}")
@@ -96,10 +131,14 @@ class VerticalTabBrowser(QMainWindow):
                 download.setDownloadFileName(Path(filepath).name)
                 download.accept()
                 self.download_manager.add_download(download)
+                # ダウンロード開始時にダウンロードマネージャーを表示
+                self.show_download_dialog()
         else:
             download.setDownloadDirectory(str(download_dir))
             download.accept()
             self.download_manager.add_download(download)
+            # ダウンロード開始時にダウンロードマネージャーを表示
+            self.show_download_dialog()
     
     def init_ui(self):
         """UIの初期化"""
@@ -190,10 +229,12 @@ class VerticalTabBrowser(QMainWindow):
             "javascript": self.settings.value("enable_javascript", True, type=bool),
             "plugins": self.settings.value("enable_plugins", True, type=bool),
             "images": self.settings.value("auto_load_images", True, type=bool),
-            "ua_preset": self.settings.value("ua_preset", 0, type=int)
+            "fullscreen": self.settings.value("allow_fullscreen", True, type=bool),
+            "ua_preset": self.settings.value("ua_preset", 0, type=int),
+            "ua_custom": self.settings.value("ua_custom", "")
         }
         
-        dialog = MainDialog(self.history_manager, self.bookmark_manager, self)
+        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
         dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
         dialog.exec()
         
@@ -201,15 +242,33 @@ class VerticalTabBrowser(QMainWindow):
             "javascript": self.settings.value("enable_javascript", True, type=bool),
             "plugins": self.settings.value("enable_plugins", True, type=bool),
             "images": self.settings.value("auto_load_images", True, type=bool),
-            "ua_preset": self.settings.value("ua_preset", 0, type=int)
+            "fullscreen": self.settings.value("allow_fullscreen", True, type=bool),
+            "ua_preset": self.settings.value("ua_preset", 0, type=int),
+            "ua_custom": self.settings.value("ua_custom", "")
         }
         
+        # 設定変更があれば再起動を提案
         if old_settings != new_settings:
-            self.apply_settings()
+            reply = QMessageBox.question(
+                self,
+                "再起動の確認",
+                "設定を完全に反映するにはブラウザの再起動が必要です。\n今すぐ再起動しますか？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.save_current_session()
+                QApplication.quit()
+            else:
+                # 一部の設定のみ即座に適用を試みる
+                self.apply_settings()
     
     def show_download_dialog(self):
         """ダウンロードマネージャー表示"""
-        dialog = DownloadDialog(self.download_manager, self)
+        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
+        dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
+        dialog.show_download_tab()  # ダウンロードタブを表示
         dialog.exec()
     
     def add_bookmark_from_current_tab(self):

@@ -14,7 +14,7 @@ from html import escape, unescape
 from PySide6.QtCore import QThread, Signal
 
 from constants import (
-    HISTORY_DB, BOOKMARKS_DB, SESSION_FILE, 
+    HISTORY_DB, BOOKMARKS_DB, SESSION_FILE, DOWNLOADS_DB,
     BROWSER_VERSION_SEMANTIC, BROWSER_FULL_NAME, UPDATE_CHECK_URL
 )
 
@@ -241,17 +241,146 @@ class BookmarkManager:
 # =====================================================================
 
 class DownloadManager:
-    """ダウンロード管理クラス"""
+    """ダウンロード管理クラス（永続化対応）"""
     
     def __init__(self):
+        self.db_path = DOWNLOADS_DB
         self.downloads = []
+        self.init_database()
+    
+    def init_database(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS downloads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                url TEXT NOT NULL,
+                download_path TEXT,
+                total_bytes INTEGER DEFAULT 0,
+                received_bytes INTEGER DEFAULT 0,
+                state INTEGER DEFAULT 0,
+                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finish_time TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        print("[INFO] Downloads database initialized")
     
     def add_download(self, download_item):
+        """ダウンロードをメモリとDBに追加"""
         self.downloads.append(download_item)
-        print(f"[INFO] Download started: {download_item.downloadFileName()}")
+        
+        # ファイルの完全パスを取得
+        download_path = download_item.downloadDirectory()
+        filename = download_item.downloadFileName()
+        
+        # DBに保存
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO downloads (filename, url, download_path, total_bytes, received_bytes, state)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            filename,
+            download_item.url().toString(),
+            download_path,
+            download_item.totalBytes(),
+            download_item.receivedBytes(),
+            download_item.state().value  # .valueで整数値を取得
+        ))
+        download_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        print(f"[INFO] Download added to DB with ID {download_id}: {filename}")
+        
+        # ダウンロード進捗の更新をDBに反映
+        download_item.receivedBytesChanged.connect(
+            lambda: self.update_download_progress(download_id, download_item)
+        )
+        download_item.stateChanged.connect(
+            lambda state: self.update_download_state(download_id, download_item, state)
+        )
+        
+        print(f"[INFO] Download started: {filename}")
+    
+    def update_download_progress(self, download_id, download_item):
+        """ダウンロード進捗をDBに更新"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE downloads 
+                SET received_bytes = ?, total_bytes = ?
+                WHERE id = ?
+            ''', (download_item.receivedBytes(), download_item.totalBytes(), download_id))
+            conn.commit()
+            conn.close()
+            print(f"[DEBUG] Download progress updated: {download_id}, {download_item.receivedBytes()}/{download_item.totalBytes()}")
+        except Exception as e:
+            print(f"[ERROR] Failed to update download progress: {e}")
+    
+    def update_download_state(self, download_id, download_item, state):
+        """ダウンロード状態をDBに更新"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # DownloadStateの値を取得
+            if hasattr(state, 'value'):
+                state_value = state.value
+            else:
+                state_value = int(state)
+            
+            # 完了時は終了時刻も記録
+            if state_value == 2:  # DownloadCompleted
+                cursor.execute('''
+                    UPDATE downloads 
+                    SET state = ?, received_bytes = ?, finish_time = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (state_value, download_item.receivedBytes(), download_id))
+                print(f"[INFO] Download completed: {download_id}")
+            else:
+                cursor.execute('''
+                    UPDATE downloads 
+                    SET state = ?
+                    WHERE id = ?
+                ''', (state_value, download_id))
+                print(f"[DEBUG] Download state updated: {download_id}, state={state_value}")
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[ERROR] Failed to update download state: {e}")
     
     def get_downloads(self):
+        """現在のダウンロードリストを取得"""
         return self.downloads
+    
+    def get_download_history(self, limit=100):
+        """ダウンロード履歴をDBから取得"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT filename, url, download_path, total_bytes, received_bytes, state, start_time, finish_time
+            FROM downloads
+            ORDER BY start_time DESC
+            LIMIT ?
+        ''', (limit,))
+        results = cursor.fetchall()
+        conn.close()
+        return results
+    
+    def clear_download_history(self):
+        """ダウンロード履歴をクリア"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM downloads')
+        conn.commit()
+        conn.close()
+        print("[INFO] Download history cleared")
 
 
 # =====================================================================
