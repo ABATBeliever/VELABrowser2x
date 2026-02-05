@@ -17,7 +17,7 @@ VELA（Vital Environment for Liberty Access）は、PySide6 と QtWebEngine を�
 
 ## 入手
 
-現在Alphaであり、使用は推奨しません。
+現在Betaであり、使用は推奨しません。
 
 1.xをご利用ください。
 
@@ -71,3 +71,4 @@ VELA Browser は **GNU Lesser General Public License (LGPL)** に基づいて配
 - **リポジトリ:** [https://github.com/ABATBeliever/VELA-Browser](https://github.com/ABATBeliever/VELABrowser2x)  
 - **問題報告:** [https://github.com/ABATBeliever/VELA-Browser/issues](https://github.com/ABATBeliever/VELABrowser2x/issues)  
 - **公式ページ:** [https://abatbeliever.net/app/VELABrowser/](https://abatbeliever.net/app/VELABrowser/)
+
