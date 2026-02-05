@@ -817,3 +817,105 @@ class DownloadDialog(QDialog):
             }
             state = state_map.get(download.state(), "不明")
             self.download_table.setItem(i, 3, QTableWidgetItem(state))
+
+
+# =====================================================================
+# ページ内検索ダイアログ
+# =====================================================================
+
+class FindDialog(QDialog):
+    """ページ内検索ダイアログ（Chrome風・リアルタイム検索）"""
+    
+    def __init__(self, web_view, parent=None):
+        super().__init__(parent)
+        self.web_view = web_view
+        self.setWindowTitle("ページ内を検索")
+        self.setMinimumWidth(400)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
+        self.init_ui()
+    
+    def init_ui(self):
+        self.setStyleSheet(STYLES['dialog'])
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(12)
+        
+        # タイトル
+        title_label = QLabel("<h3>ページ内を検索</h3>")
+        layout.addWidget(title_label)
+        
+        # 検索バーと次/前ボタン
+        search_layout = QHBoxLayout()
+        
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("検索するテキストを入力...")
+        self.search_input.textChanged.connect(self.on_text_changed)
+        search_layout.addWidget(self.search_input)
+        
+        # 前へボタン
+        prev_btn = QPushButton("前へ")
+        prev_btn.setStyleSheet(STYLES['button_secondary'])
+        prev_btn.setFixedWidth(70)
+        prev_btn.clicked.connect(self.find_previous)
+        search_layout.addWidget(prev_btn)
+        
+        # 次へボタン
+        next_btn = QPushButton("次へ")
+        next_btn.setStyleSheet(STYLES['button_secondary'])
+        next_btn.setFixedWidth(70)
+        next_btn.clicked.connect(self.find_next)
+        search_layout.addWidget(next_btn)
+        
+        layout.addLayout(search_layout)
+        
+        # 区切り線
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line)
+        
+        # 閉じるボタン
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        close_btn = QPushButton("閉じる")
+        close_btn.setMinimumWidth(100)
+        close_btn.setStyleSheet(STYLES['button_primary'])
+        close_btn.clicked.connect(self.close_and_clear)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # フォーカスを検索フィールドに
+        self.search_input.setFocus()
+    
+    def on_text_changed(self, text):
+        """テキストが変更されたらリアルタイムで検索"""
+        if text:
+            self.web_view.findText(text)
+        else:
+            # 空の場合は検索をクリア
+            self.web_view.findText("")
+    
+    def find_next(self):
+        """次を検索"""
+        text = self.search_input.text()
+        if text:
+            self.web_view.findText(text)
+    
+    def find_previous(self):
+        """前を検索"""
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        text = self.search_input.text()
+        if text:
+            self.web_view.findText(text, QWebEnginePage.FindBackward)
+    
+    def close_and_clear(self):
+        """閉じる際に検索をクリア"""
+        self.web_view.findText("")
+        self.close()
+    
+    def closeEvent(self, event):
+        """ダイアログが閉じられる際に検索をクリア"""
+        self.web_view.findText("")
+        event.accept()

@@ -44,7 +44,7 @@ echo Run VELA  :
 echo uv run python VELABrowser.py
 echo.
 echo Build VELA:
-echo uv run nuitka --standalone --onefile --enable-plugin=pyside6 --follow-imports --windows-console-mode=attach --windows-icon-from-ico="img/icon-win.ico" --msvc=latest VELABrowser.py
+echo call scripts/build.bat
 echo.
 echo If you see the message "FATAL: Error, cannot locate suitable C compiler.",
 echo please refer to "https://abatbeliever.net/app/VELABrowser/docs/?p=WindowsÇ…Ç®ÇØÇÈÉrÉãÉhä¬ã´ÇÃç\íz.txt".

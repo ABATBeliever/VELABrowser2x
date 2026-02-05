@@ -11,16 +11,16 @@ from PySide6.QtCore import Qt, QUrl, QSettings
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLineEdit, QListWidget, QSplitter, QToolBar, QMessageBox,
-    QFileDialog, QApplication
+    QFileDialog, QApplication, QMenu
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QAction
 import qtawesome as qta
 
 from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR, USER_AGENT_PRESETS
 from managers import HistoryManager, BookmarkManager, DownloadManager, SessionManager, UpdateChecker
-from dialogs import AddBookmarkDialog, MainDialog
+from dialogs import AddBookmarkDialog, MainDialog, FindDialog
 
 
 from PySide6.QtCore import QUrl, Signal
@@ -223,6 +223,97 @@ class VerticalTabBrowser(QMainWindow):
         )
         msg_box.exec()
     
+    def show_menu(self):
+        """メニューを表示"""
+        menu = QMenu(self)
+        menu.setStyleSheet(STYLES['menu'])
+        
+        # 新しいタブ
+        new_tab_action = QAction(qta.icon('fa5s.plus', color='#4a90d9'), "新しいタブ", self)
+        new_tab_action.triggered.connect(lambda: self.add_new_tab("https://www.google.com", activate=True))
+        menu.addAction(new_tab_action)
+        
+        menu.addSeparator()
+        
+        # ブックマーク
+        bookmark_action = QAction(qta.icon('fa5s.star', color='#f4c430'), "ブックマーク", self)
+        bookmark_action.triggered.connect(self.show_bookmarks_dialog)
+        menu.addAction(bookmark_action)
+        
+        # 履歴
+        history_action = QAction(qta.icon('fa5s.history', color='#666'), "履歴", self)
+        history_action.triggered.connect(self.show_history_dialog)
+        menu.addAction(history_action)
+        
+        # ダウンロード
+        download_action = QAction(qta.icon('fa5s.download', color='#666'), "ダウンロード", self)
+        download_action.triggered.connect(self.show_download_dialog)
+        menu.addAction(download_action)
+        
+        menu.addSeparator()
+        
+        # ローカルファイルを開く
+        local_action = QAction(qta.icon('fa5s.folder-open', color='#666'), "ローカルファイルを開く", self)
+        local_action.triggered.connect(self.open_local_file)
+        menu.addAction(local_action)
+        
+        # ページ内を検索
+        find_action = QAction(qta.icon('fa5s.search', color='#666'), "ページ内を検索", self)
+        find_action.triggered.connect(self.find_in_page)
+        menu.addAction(find_action)
+        
+        menu.addSeparator()
+        
+        # 設定
+        settings_action = QAction(qta.icon('fa5s.cog', color='#666'), "設定", self)
+        settings_action.triggered.connect(self.show_main_dialog)
+        menu.addAction(settings_action)
+        
+        menu.addSeparator()
+        
+        # 終了
+        exit_action = QAction(qta.icon('fa5s.sign-out-alt', color='#d9534f'), "終了", self)
+        exit_action.triggered.connect(self.close)
+        menu.addAction(exit_action)
+        
+        # メニューを表示（ボタンの下に）
+        sender = self.sender()
+        if sender:
+            menu.exec(sender.mapToGlobal(sender.rect().bottomLeft()))
+    
+    def show_bookmarks_dialog(self):
+        """ブックマークダイアログを表示"""
+        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
+        dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
+        dialog.tab_widget.setCurrentIndex(3)  # ブックマークタブを選択
+        dialog.exec()
+    
+    def show_history_dialog(self):
+        """履歴ダイアログを表示"""
+        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
+        dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
+        dialog.tab_widget.setCurrentIndex(2)  # 履歴タブを選択
+        dialog.exec()
+    
+    def open_local_file(self):
+        """ローカルファイルを新しいタブで開く"""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "ローカルファイルを開く",
+            str(Path.home()),
+            "All Files (*)"
+        )
+        if filepath:
+            file_url = QUrl.fromLocalFile(filepath)
+            self.add_new_tab(file_url.toString(), activate=True)
+    
+    def find_in_page(self):
+        """ページ内検索（改良版ダイアログ）"""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem):
+            dialog = FindDialog(current_item.web_view, self)
+            dialog.exec()
+    
     def show_main_dialog(self):
         """メインダイアログ表示"""
         old_settings = {
@@ -362,13 +453,6 @@ class VerticalTabBrowser(QMainWindow):
         self.url_bar.returnPressed.connect(self.navigate_to_url)
         toolbar.addWidget(self.url_bar)
         
-        go_btn = QPushButton()
-        go_btn.setIcon(qta.icon('fa5s.search', color='#0078d4'))
-        go_btn.setToolTip("移動/検索")
-        go_btn.setFixedSize(32, 32)
-        go_btn.clicked.connect(self.navigate_to_url)
-        toolbar.addWidget(go_btn)
-        
         bookmark_add_btn = QPushButton()
         bookmark_add_btn.setIcon(qta.icon('fa5s.star', color='#f4c430'))
         bookmark_add_btn.setToolTip("ブックマークに追加")
@@ -376,19 +460,12 @@ class VerticalTabBrowser(QMainWindow):
         bookmark_add_btn.clicked.connect(self.add_bookmark_from_current_tab)
         toolbar.addWidget(bookmark_add_btn)
         
-        download_btn = QPushButton()
-        download_btn.setIcon(qta.icon('fa5s.download', color='#666'))
-        download_btn.setToolTip("ダウンロード")
-        download_btn.setFixedSize(32, 32)
-        download_btn.clicked.connect(self.show_download_dialog)
-        toolbar.addWidget(download_btn)
-        
-        settings_btn = QPushButton()
-        settings_btn.setIcon(qta.icon('fa5s.cog', color='#666'))
-        settings_btn.setToolTip("設定・履歴・ブックマーク")
-        settings_btn.setFixedSize(32, 32)
-        settings_btn.clicked.connect(self.show_main_dialog)
-        toolbar.addWidget(settings_btn)
+        menu_btn = QPushButton()
+        menu_btn.setIcon(qta.icon('fa5s.ellipsis-h', color='#666'))
+        menu_btn.setToolTip("メニュー")
+        menu_btn.setFixedSize(32, 32)
+        menu_btn.clicked.connect(self.show_menu)
+        toolbar.addWidget(menu_btn)
         
         self.web_container = QWidget()
         self.web_layout = QVBoxLayout(self.web_container)

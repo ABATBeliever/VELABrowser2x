@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-echo "VELA DevelopmentKit for rasp
+echo "VELA DevelopmentKit for rasp"
 echo
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,12 +36,8 @@ echo "Run VELA  :"
 echo "uv run python VELABrowser.py"
 echo
 echo "Build VELA:"
-echo "uv run nuitka \\"
-echo "  --standalone \\"
-echo "  --onefile \\"
-echo "  --enable-plugin=pyside6 \\"
-echo "  --follow-imports \\"
-echo "  VELABrowser.py"
+echo "chmod +x ./scripts/build.sh"
+echo "./scripts/build.sh"
 echo
 
 exec bash
