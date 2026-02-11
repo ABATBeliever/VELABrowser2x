@@ -11,6 +11,9 @@
 VELA（Vital Environment for Liberty Access）は、PySide6 と QtWebEngine を利用して開発された、モダンで移植性・拡張性の高いマルチプラットフォームブラウザです。  
 **個人情報の保護、洗練されたUI、必要な機能に特化**
 
+<img width="1238" height="864" alt="image" src="https://github.com/user-attachments/assets/605a2108-f54f-4233-a12b-449bdca2d237" />
+
+
 ※このリポジトリは2.x用です。1.x「Genesis」は [こちら](https://github.com/ABATBeliever/VELA-Browser/) (非推奨)
 
 ---
@@ -63,5 +66,6 @@ VELA Browser は **GNU Lesser General Public License (LGPL)** に基づいて配
 - **リポジトリ:** [https://github.com/ABATBeliever/VELA-Browser](https://github.com/ABATBeliever/VELABrowser2x)  
 - **問題報告:** [https://github.com/ABATBeliever/VELA-Browser/issues](https://github.com/ABATBeliever/VELABrowser2x/issues)  
 - **公式ページ:** [https://abatbeliever.net/app/VELABrowser/](https://abatbeliever.net/app/VELABrowser/)
+
 
 
