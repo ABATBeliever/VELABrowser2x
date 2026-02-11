@@ -11,8 +11,8 @@ from pathlib import Path
 # =====================================================================
 BROWSER_NAME = "VELA"
 BROWSER_CODENAME = "Praxis"
-BROWSER_VERSION_SEMANTIC = "2.0.0.0b2"
-BROWSER_VERSION_NAME = "2.0.0.0 Beta2"
+BROWSER_VERSION_SEMANTIC = "2.0.0.0"
+BROWSER_VERSION_NAME = "2.0.0.0 Stable"
 BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
 
 def detect_browser_target_architecture():
@@ -48,7 +48,7 @@ UPDATE_CHECK_URL = f"https://abatbeliever.net/upd/VELABrowser/{BROWSER_CODENAME}
 # =====================================================================
 USER_AGENT_PRESETS = {
     0: "",  # デフォルト(Chromium)
-    1: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+    1: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
     2: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
     3: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.5615.135 Mobile Safari/537.36",
     4: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
@@ -57,7 +57,7 @@ USER_AGENT_PRESETS = {
 
 USER_AGENT_PRESET_NAMES = [
     "デフォルト (Chromium)",
-    "Firefox 115 (Windows)",
+    "Firefox 147 (Windows)",
     "Safari 16.5 (macOS)",
     "Chrome Mobile (Android)",
     "Safari Mobile (iOS)",
@@ -67,7 +67,7 @@ USER_AGENT_PRESET_NAMES = [
 # =====================================================================
 # データディレクトリ設定
 # =====================================================================
-DATA_DIR = Path.home() / ".vela_browser"
+DATA_DIR = Path.home() / ".VELA_Browser"
 DATA_DIR.mkdir(exist_ok=True)
 
 HISTORY_DB = DATA_DIR / "history.db"
@@ -260,14 +260,6 @@ STYLES = {
             background-color: #4a90d9;
             border-color: #4a90d9;
         }
-        QCheckBox::indicator:checked::after {
-            content: "";
-            width: 8px;
-            height: 8px;
-            margin: 3px;
-            background-color: #ffffff;
-            border-radius: 2px;
-        }
 
         QRadioButton::indicator {
             width: 18px;
@@ -278,14 +270,7 @@ STYLES = {
         }
         QRadioButton::indicator:checked {
             border-color: #4a90d9;
-        }
-        QRadioButton::indicator:checked::after {
-            content: "";
-            width: 8px;
-            height: 8px;
-            margin: 3px;
             background-color: #4a90d9;
-            border-radius: 4px;
         }
 
         /* Table / Tree */

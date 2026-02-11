@@ -145,7 +145,7 @@ class MainDialog(QDialog):
         
         # 設定を遅延インポート（循環参照回避）
         from PySide6.QtCore import QSettings
-        self.settings = QSettings("ABATBeliever", "VELA")
+        self.settings = QSettings("VELABrowser", "Praxis")
         
         self.init_ui()
     
@@ -305,10 +305,6 @@ class MainDialog(QDialog):
         privacy_group = QGroupBox("プライバシー設定")
         privacy_layout = QVBoxLayout()
         
-        self.do_not_track_check = QCheckBox("Do Not Track を送信")
-        self.do_not_track_check.setChecked(self.settings.value("do_not_track", False, type=bool))
-        privacy_layout.addWidget(self.do_not_track_check)
-        
         self.clear_on_exit_check = QCheckBox("終了時に履歴を削除")
         self.clear_on_exit_check.setChecked(self.settings.value("clear_on_exit", False, type=bool))
         privacy_layout.addWidget(self.clear_on_exit_check)
@@ -338,23 +334,6 @@ class MainDialog(QDialog):
         download_group.setLayout(download_layout)
         layout.addWidget(download_group)
         
-        # 外観設定
-        appearance_group = QGroupBox("外観設定")
-        appearance_layout = QVBoxLayout()
-        
-        zoom_layout = QHBoxLayout()
-        zoom_layout.addWidget(QLabel("デフォルトズーム:"))
-        self.zoom_spin = QSpinBox()
-        self.zoom_spin.setRange(50, 200)
-        self.zoom_spin.setValue(self.settings.value("default_zoom", 100, type=int))
-        self.zoom_spin.setSuffix("%")
-        zoom_layout.addWidget(self.zoom_spin)
-        zoom_layout.addStretch()
-        appearance_layout.addLayout(zoom_layout)
-        
-        appearance_group.setLayout(appearance_layout)
-        layout.addWidget(appearance_group)
-        
         # 詳細設定
         advanced_group = QGroupBox("詳細設定")
         advanced_layout = QVBoxLayout()
@@ -363,10 +342,6 @@ class MainDialog(QDialog):
         self.javascript_check.setChecked(self.settings.value("enable_javascript", True, type=bool))
         advanced_layout.addWidget(self.javascript_check)
         
-        self.plugins_check = QCheckBox("プラグインを有効にする")
-        self.plugins_check.setChecked(self.settings.value("enable_plugins", True, type=bool))
-        advanced_layout.addWidget(self.plugins_check)
-        
         self.fullscreen_check = QCheckBox("全画面表示を許可")
         self.fullscreen_check.setChecked(self.settings.value("allow_fullscreen", True, type=bool))
         advanced_layout.addWidget(self.fullscreen_check)
@@ -374,6 +349,10 @@ class MainDialog(QDialog):
         self.images_check = QCheckBox("画像を自動的に読み込む")
         self.images_check.setChecked(self.settings.value("auto_load_images", True, type=bool))
         advanced_layout.addWidget(self.images_check)
+        
+        self.hardware_acceleration_check = QCheckBox("ハードウェアアクセラレーションを有効にする")
+        self.hardware_acceleration_check.setChecked(self.settings.value("enable_hardware_acceleration", True, type=bool))
+        advanced_layout.addWidget(self.hardware_acceleration_check)
         
         advanced_group.setLayout(advanced_layout)
         layout.addWidget(advanced_group)
@@ -504,15 +483,13 @@ class MainDialog(QDialog):
         self.settings.setValue("startup_action", self.startup_combo.currentIndex())
         self.settings.setValue("save_session", self.save_session_check.isChecked())
         self.settings.setValue("search_engine", self.search_engine_combo.currentIndex())
-        self.settings.setValue("do_not_track", self.do_not_track_check.isChecked())
         self.settings.setValue("clear_on_exit", self.clear_on_exit_check.isChecked())
         self.settings.setValue("download_dir", self.download_dir_input.text())
         self.settings.setValue("ask_download", self.ask_download_check.isChecked())
-        self.settings.setValue("default_zoom", self.zoom_spin.value())
         self.settings.setValue("enable_javascript", self.javascript_check.isChecked())
-        self.settings.setValue("enable_plugins", self.plugins_check.isChecked())
         self.settings.setValue("allow_fullscreen", self.fullscreen_check.isChecked())
         self.settings.setValue("auto_load_images", self.images_check.isChecked())
+        self.settings.setValue("enable_hardware_acceleration", self.hardware_acceleration_check.isChecked())
         self.settings.setValue("ua_preset", self.ua_preset_combo.currentIndex())
         self.settings.setValue("ua_custom", self.ua_custom_input.text())
         

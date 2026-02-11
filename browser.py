@@ -39,14 +39,29 @@ class CustomWebEnginePage(QWebEnginePage):
     
     def __init__(self, profile, parent=None):
         super().__init__(profile, parent)
+        self._profile = profile  # プロファイルへの参照を保持
     
     def createWindow(self, window_type):
         """新しいウィンドウ/タブが要求された時の処理"""
         print("[INFO] TabControl: Add")
-        page = CustomWebEnginePage(self.profile(), self.parent())
-        page.new_tab_requested.connect(self.new_tab_requested.emit)
-        page.urlChanged.connect(lambda url: self.new_tab_requested.emit(url))
-        return page
+        # 親ウィジェット（ブラウザ）への参照を取得
+        browser = self.parent()
+        while browser and not isinstance(browser, VerticalTabBrowser):
+            browser = browser.parent()
+        
+        if browser:
+            # ブラウザに新しいページの作成を委譲
+            page = CustomWebEnginePage(self._profile, browser)
+            page.new_tab_requested.connect(self.new_tab_requested.emit)
+            page.urlChanged.connect(lambda url: self.new_tab_requested.emit(url))
+            # ブラウザの一時ページリストに追加して参照を保持
+            if not hasattr(browser, '_temp_pages'):
+                browser._temp_pages = []
+            browser._temp_pages.append(page)
+            return page
+        else:
+            # フォールバック
+            return super().createWindow(window_type)
 
 
 # =====================================================================
@@ -72,12 +87,13 @@ class VerticalTabBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
         self.tabs = []
+        self._temp_pages = []  # 一時的なページの参照を保持（ガベージコレクション対策）
         self.profile = QWebEngineProfile.defaultProfile()
         self.history_manager = HistoryManager()
         self.bookmark_manager = BookmarkManager()
         self.download_manager = DownloadManager()
         self.session_manager = SessionManager()
-        self.settings = QSettings("ABATBeliever", "VELA")
+        self.settings = QSettings("VELABrowser", "Praxis")
         
         self.apply_settings()
         self.init_ui()
@@ -92,10 +108,13 @@ class VerticalTabBrowser(QMainWindow):
                                  self.settings.value("allow_fullscreen", True, type=bool))
         web_settings.setAttribute(QWebEngineSettings.JavascriptEnabled, 
                                  self.settings.value("enable_javascript", True, type=bool))
-        web_settings.setAttribute(QWebEngineSettings.PluginsEnabled, 
-                                 self.settings.value("enable_plugins", True, type=bool))
         web_settings.setAttribute(QWebEngineSettings.AutoLoadImages,
                                  self.settings.value("auto_load_images", True, type=bool))
+        
+        # ハードウェアアクセラレーション設定
+        if not self.settings.value("enable_hardware_acceleration", True, type=bool):
+            web_settings.setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, False)
+            web_settings.setAttribute(QWebEngineSettings.WebGLEnabled, False)
         
         # UserAgent設定
         ua_preset = self.settings.value("ua_preset", 0, type=int)
@@ -230,7 +249,7 @@ class VerticalTabBrowser(QMainWindow):
         
         # 新しいタブ
         new_tab_action = QAction(qta.icon('fa5s.plus', color='#4a90d9'), "新しいタブ", self)
-        new_tab_action.triggered.connect(lambda: self.add_new_tab("https://www.google.com", activate=True))
+        new_tab_action.triggered.connect(lambda: self.add_new_tab(self.settings.value("homepage", "https://www.google.com")))
         menu.addAction(new_tab_action)
         
         menu.addSeparator()
@@ -318,9 +337,9 @@ class VerticalTabBrowser(QMainWindow):
         """メインダイアログ表示"""
         old_settings = {
             "javascript": self.settings.value("enable_javascript", True, type=bool),
-            "plugins": self.settings.value("enable_plugins", True, type=bool),
             "images": self.settings.value("auto_load_images", True, type=bool),
             "fullscreen": self.settings.value("allow_fullscreen", True, type=bool),
+            "hw_accel": self.settings.value("enable_hardware_acceleration", True, type=bool),
             "ua_preset": self.settings.value("ua_preset", 0, type=int),
             "ua_custom": self.settings.value("ua_custom", "")
         }
@@ -331,9 +350,9 @@ class VerticalTabBrowser(QMainWindow):
         
         new_settings = {
             "javascript": self.settings.value("enable_javascript", True, type=bool),
-            "plugins": self.settings.value("enable_plugins", True, type=bool),
             "images": self.settings.value("auto_load_images", True, type=bool),
             "fullscreen": self.settings.value("allow_fullscreen", True, type=bool),
+            "hw_accel": self.settings.value("enable_hardware_acceleration", True, type=bool),
             "ua_preset": self.settings.value("ua_preset", 0, type=int),
             "ua_custom": self.settings.value("ua_custom", "")
         }
@@ -343,7 +362,7 @@ class VerticalTabBrowser(QMainWindow):
             reply = QMessageBox.question(
                 self,
                 "再起動の確認",
-                "設定を完全に反映するにはブラウザの再起動が必要です。\n今すぐ再起動しますか？",
+                "設定の一部は再起動後に適用されます。\n今すぐ終了しますか？",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes
             )
@@ -520,9 +539,6 @@ class VerticalTabBrowser(QMainWindow):
         """新規タブ追加"""
         web_view = QWebEngineView()
         
-        default_zoom = self.settings.value("default_zoom", 100, type=int)
-        web_view.setZoomFactor(default_zoom / 100.0)
-        
         page = CustomWebEnginePage(self.profile, web_view)
         page.new_tab_requested.connect(lambda url: self.add_new_tab(url.toString(), activate=True))
         page.fullScreenRequested.connect(self.handle_fullscreen_request)
@@ -538,6 +554,10 @@ class VerticalTabBrowser(QMainWindow):
         
         self.tab_list.addItem(tab_item)
         self.tabs.append(web_view)
+        
+        # 一時ページリストをクリア（ガベージコレクション対策）
+        if hasattr(self, '_temp_pages'):
+            self._temp_pages.clear()
         
         if activate:
             self.tab_list.setCurrentItem(tab_item)
