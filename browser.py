@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QUrl, QSettings
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLineEdit, QListWidget, QSplitter, QToolBar, QMessageBox,
-    QFileDialog, QApplication, QMenu
+    QFileDialog, QApplication, QMenu, QLabel
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
@@ -68,13 +68,73 @@ class CustomWebEnginePage(QWebEnginePage):
 # タブアイテム
 # =====================================================================
 
+class TabItemWidget(QWidget):
+    """タブアイテム用のカスタムウィジェット（タイトル＋閉じるボタン）"""
+    close_requested = Signal()
+    
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.init_ui(title)
+    
+    def init_ui(self, title):
+        # ウィジェット自体の背景を透明に
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet("background: transparent;")
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        
+        # ミュートアイコン（初期状態では非表示）
+        self.mute_icon = QLabel()
+        self.mute_icon.setPixmap(qta.icon('fa5s.volume-mute', color='#666').pixmap(12, 12))
+        self.mute_icon.setStyleSheet("background: transparent; padding: 0px;")
+        self.mute_icon.setVisible(False)
+        layout.addWidget(self.mute_icon)
+        
+        # タイトルラベル
+        self.title_label = QLabel(title)
+        self.title_label.setStyleSheet("""
+            QLabel {
+                background: transparent;
+                color: #2e2e2e;
+                padding: 0px;
+                font-size: 10pt;
+            }
+        """)
+        self.title_label.setWordWrap(False)
+        layout.addWidget(self.title_label, 1)
+        
+        # 閉じるボタン
+        self.close_button = QPushButton()
+        self.close_button.setIcon(qta.icon('fa5s.times', color='#666'))
+        self.close_button.setStyleSheet(STYLES['tab_item_close_button'])
+        self.close_button.setToolTip("タブを閉じる")
+        self.close_button.clicked.connect(self.close_requested.emit)
+        layout.addWidget(self.close_button)
+    
+    def set_title(self, title):
+        """タイトルを設定"""
+        self.title_label.setText(title)
+    
+    def set_muted(self, is_muted):
+        """ミュート状態を設定"""
+        self.mute_icon.setVisible(is_muted)
+
+
 class TabItem(QListWidgetItem):
     """タブを表すリストアイテム"""
     
     def __init__(self, title, web_view):
-        super().__init__(title)
+        super().__init__()
         self.web_view = web_view
         self.url = web_view.url()
+        self.is_muted = False
+        self.widget = TabItemWidget(title)
+        # サイズヒントを大きめに設定
+        self.setSizeHint(self.widget.sizeHint())
+        # フラグ設定（選択可能、有効）
+        self.setFlags(self.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled)
 
 
 # =====================================================================
@@ -88,7 +148,17 @@ class VerticalTabBrowser(QMainWindow):
         super().__init__()
         self.tabs = []
         self._temp_pages = []  # 一時的なページの参照を保持（ガベージコレクション対策）
-        self.profile = QWebEngineProfile.defaultProfile()
+        
+        # 永続化プロファイルを作成（Cookie、LocalStorageなどが保存される）
+        from constants import DATA_DIR
+        profile_path = str(DATA_DIR / "profile")
+        self.profile = QWebEngineProfile("VELAProfile")
+        self.profile.setPersistentStoragePath(profile_path)
+        self.profile.setCachePath(str(DATA_DIR / "cache"))
+        
+        # 永続化を有効にする
+        self.profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
+        
         self.history_manager = HistoryManager()
         self.bookmark_manager = BookmarkManager()
         self.download_manager = DownloadManager()
@@ -408,28 +478,18 @@ class VerticalTabBrowser(QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(5)
-        
+        # 新規タブボタン（横幅いっぱいに拡張）
         new_tab_btn = QPushButton()
         new_tab_btn.setIcon(qta.icon('fa5s.plus', color='#0078d4'))
         new_tab_btn.setToolTip("新規タブ")
-        new_tab_btn.setFixedSize(36, 36)
+        new_tab_btn.setMinimumHeight(36)
         new_tab_btn.clicked.connect(lambda: self.add_new_tab(self.settings.value("homepage", "https://www.google.com")))
-        button_layout.addWidget(new_tab_btn)
-        
-        close_tab_btn = QPushButton()
-        close_tab_btn.setIcon(qta.icon('fa5s.times', color='#d13438'))
-        close_tab_btn.setToolTip("タブを閉じる")
-        close_tab_btn.setFixedSize(36, 36)
-        close_tab_btn.clicked.connect(self.close_current_tab)
-        button_layout.addWidget(close_tab_btn)
-        
-        button_layout.addStretch()
-        layout.addLayout(button_layout)
+        layout.addWidget(new_tab_btn)
         
         self.tab_list = QListWidget()
         self.tab_list.currentItemChanged.connect(self.on_tab_changed)
+        self.tab_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tab_list.customContextMenuRequested.connect(self.show_tab_context_menu)
         layout.addWidget(self.tab_list)
         
         return widget
@@ -553,6 +613,11 @@ class VerticalTabBrowser(QMainWindow):
         tab_item = TabItem("新しいタブ", web_view)
         
         self.tab_list.addItem(tab_item)
+        self.tab_list.setItemWidget(tab_item, tab_item.widget)
+        
+        # 閉じるボタンのシグナル接続
+        tab_item.widget.close_requested.connect(lambda: self.close_tab_by_item(tab_item))
+        
         self.tabs.append(web_view)
         
         # 一時ページリストをクリア（ガベージコレクション対策）
@@ -594,6 +659,9 @@ class VerticalTabBrowser(QMainWindow):
         web_view.show()
         
         self.url_bar.setText(web_view.url().toString())
+        
+        # ウィンドウタイトルを更新
+        self.update_window_title(web_view.title())
     
     def update_tab_title(self, web_view, title):
         """タブタイトル更新"""
@@ -601,7 +669,11 @@ class VerticalTabBrowser(QMainWindow):
             item = self.tab_list.item(i)
             if isinstance(item, TabItem) and item.web_view == web_view:
                 display_title = title[:30] + "..." if len(title) > 30 else title
-                item.setText(display_title)
+                item.widget.set_title(display_title)
+                
+                # 現在アクティブなタブの場合、ウィンドウタイトルも更新
+                if self.tab_list.currentItem() == item:
+                    self.update_window_title(title)
                 break
     
     def update_url_bar(self, web_view, url):
@@ -610,6 +682,13 @@ class VerticalTabBrowser(QMainWindow):
         if current_item and isinstance(current_item, TabItem):
             if current_item.web_view == web_view:
                 self.url_bar.setText(url.toString())
+    
+    def update_window_title(self, page_title):
+        """ウィンドウタイトルを更新"""
+        if page_title:
+            self.setWindowTitle(f"{page_title} - {BROWSER_FULL_NAME}")
+        else:
+            self.setWindowTitle(BROWSER_FULL_NAME)
     
     def navigate_to_url(self):
         """URL移動"""
@@ -637,18 +716,105 @@ class VerticalTabBrowser(QMainWindow):
         if current_item and isinstance(current_item, TabItem):
             current_item.web_view.reload()
     
-    def close_current_tab(self):
-        """タブを閉じる"""
-        current_row = self.tab_list.currentRow()
-        if current_row >= 0 and self.tab_list.count() > 1:
-            item = self.tab_list.takeItem(current_row)
-            if isinstance(item, TabItem):
-                item.web_view.deleteLater()
-                self.tabs.remove(item.web_view)
-                print("[INFO] TabControl: Close")
-        elif self.tab_list.count() == 1:
+    def show_tab_context_menu(self, position):
+        """タブの右クリックメニューを表示"""
+        item = self.tab_list.itemAt(position)
+        if not isinstance(item, TabItem):
+            return
+        
+        menu = QMenu(self)
+        menu.setStyleSheet(STYLES['tab_context_menu'])
+        
+        # タブを閉じる
+        close_action = QAction(qta.icon('fa5s.times', color='#d13438'), "タブを閉じる", self)
+        close_action.triggered.connect(lambda: self.close_tab_by_item(item))
+        menu.addAction(close_action)
+        
+        # タブを複製
+        duplicate_action = QAction(qta.icon('fa5s.clone', color='#0078d4'), "タブを複製", self)
+        duplicate_action.triggered.connect(lambda: self.duplicate_tab(item))
+        menu.addAction(duplicate_action)
+        
+        menu.addSeparator()
+        
+        # ブックマークに追加
+        bookmark_action = QAction(qta.icon('fa5s.star', color='#f4c430'), "ブックマークに追加", self)
+        bookmark_action.triggered.connect(lambda: self.add_bookmark_from_tab(item))
+        menu.addAction(bookmark_action)
+        
+        menu.addSeparator()
+        
+        # ミュート/ミュート解除
+        if item.is_muted:
+            mute_action = QAction(qta.icon('fa5s.volume-up', color='#333'), "ミュート解除", self)
+            mute_action.triggered.connect(lambda: self.toggle_mute(item))
+        else:
+            mute_action = QAction(qta.icon('fa5s.volume-mute', color='#666'), "ミュート", self)
+            mute_action.triggered.connect(lambda: self.toggle_mute(item))
+        menu.addAction(mute_action)
+        
+        menu.exec(self.tab_list.mapToGlobal(position))
+    
+    def close_tab_by_item(self, item):
+        """指定されたタブアイテムを閉じる"""
+        if not isinstance(item, TabItem):
+            return
+        
+        # タブが1つしかない場合はブラウザを閉じる
+        if self.tab_list.count() == 1:
             print("[INFO] TabControl: Close(Exit)")
             self.close()
+            return
+        
+        # タブのインデックスを取得
+        for i in range(self.tab_list.count()):
+            if self.tab_list.item(i) == item:
+                self.tab_list.takeItem(i)
+                item.web_view.deleteLater()
+                if item.web_view in self.tabs:
+                    self.tabs.remove(item.web_view)
+                print("[INFO] TabControl: Close")
+                break
+    
+    def duplicate_tab(self, item):
+        """タブを複製"""
+        if isinstance(item, TabItem):
+            url = item.web_view.url().toString()
+            self.add_new_tab(url, activate=True)
+            print(f"[INFO] TabControl: Duplicate - {url}")
+    
+    def add_bookmark_from_tab(self, item):
+        """指定されたタブをブックマークに追加"""
+        if isinstance(item, TabItem):
+            url = item.web_view.url().toString()
+            title = item.web_view.title() or "無題"
+            
+            folders = self.bookmark_manager.get_folders()
+            dialog = AddBookmarkDialog(title, url, folders, self)
+            
+            if dialog.exec():
+                result = dialog.get_result()
+                if result:
+                    self.bookmark_manager.add_bookmark(
+                        result["title"], 
+                        result["url"], 
+                        result["folder"]
+                    )
+    
+    def toggle_mute(self, item):
+        """タブのミュート状態を切り替え"""
+        if isinstance(item, TabItem):
+            item.is_muted = not item.is_muted
+            item.web_view.page().setAudioMuted(item.is_muted)
+            item.widget.set_muted(item.is_muted)
+            status = "ミュート" if item.is_muted else "ミュート解除"
+            print(f"[INFO] TabControl: {status}")
+    
+    def close_current_tab(self):
+        """現在のタブを閉じる"""
+        current_item = self.tab_list.currentItem()
+        if current_item:
+            self.close_tab_by_item(current_item)
     
     def closeEvent(self, event):
         """終了時の処理"""

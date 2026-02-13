@@ -11,8 +11,8 @@ from pathlib import Path
 # =====================================================================
 BROWSER_NAME = "VELA"
 BROWSER_CODENAME = "Praxis"
-BROWSER_VERSION_SEMANTIC = "2.0.0.0"
-BROWSER_VERSION_NAME = "2.0.0.0 Stable"
+BROWSER_VERSION_SEMANTIC = "2.0.1.0"
+BROWSER_VERSION_NAME = "2.0.1.0 Stable"
 BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
 
 def detect_browser_target_architecture():
@@ -137,9 +137,11 @@ STYLES = {
             outline: none;
         }
         QListWidget::item {
-            padding: 12px;
+            padding: 0px;
+            margin: 2px;
             color: #2e2e2e;
             background-color: #ffffff;
+            border-radius: 4px;
         }
         QListWidget::item:hover {
             background-color: #f0f3f7;
@@ -374,6 +376,47 @@ STYLES = {
         }
         QPushButton:pressed {
             background-color: #e2e5ea;
+        }
+    """,    
+    'tab_item_close_button': """
+        QPushButton {
+            background-color: transparent;
+            border: none;
+            border-radius: 3px;
+            padding: 2px;
+            min-width: 16px;
+            max-width: 16px;
+            min-height: 16px;
+            max-height: 16px;
+        }
+        QPushButton:hover {
+            background-color: rgba(0, 0, 0, 0.1);
+        }
+        QPushButton:pressed {
+            background-color: rgba(0, 0, 0, 0.2);
+        }
+    """,
+    
+    'tab_context_menu': """
+        QMenu {
+            background-color: #ffffff;
+            border: 1px solid #dcdfe3;
+            border-radius: 4px;
+            padding: 4px;
+        }
+        QMenu::item {
+            padding: 8px 30px 8px 10px;
+            border-radius: 4px;
+            color: #2e2e2e;
+        }
+        QMenu::item:selected {
+            background-color: #eaf2fb;
+            color: #1f5fa5;
+        }
+        QMenu::separator {
+            height: 1px;
+            background-color: #dcdfe3;
+            margin: 4px 0px;
         }
     """
 }

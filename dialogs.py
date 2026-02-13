@@ -231,7 +231,6 @@ class MainDialog(QDialog):
         tech_text = f"""• フレームワーク: PySide6 {pyside_version}
 • Qt バージョン: {qVersion()}
 • Python バージョン: {sys.version.split()[0]}
-• エンジン: QtWebEngine (Chromium)
 • 検出アーキテクチャ: {BROWSER_TARGET_Architecture}
 • データディレクトリ: {DATA_DIR}"""
         tech_info.setPlainText(tech_text)
@@ -259,6 +258,29 @@ class MainDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
+
+        # 保存ボタン・リセットボタン（最上部）
+        button_layout = QHBoxLayout()
+        
+        save_btn = QPushButton("設定を保存")
+        save_btn.setStyleSheet(STYLES['button_primary'])
+        save_btn.clicked.connect(self.save_settings)
+        button_layout.addWidget(save_btn)
+        
+        reset_btn = QPushButton("既定値に戻す")
+        reset_btn.setStyleSheet(STYLES['button_secondary'])
+        reset_btn.clicked.connect(self.reset_settings_to_default)
+        button_layout.addWidget(reset_btn)
+        
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+        
+        # 区切り線
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line)
+        
         
         # 一般設定
         general_group = QGroupBox("一般設定")
@@ -378,12 +400,6 @@ class MainDialog(QDialog):
         useragent_group.setLayout(useragent_layout)
         layout.addWidget(useragent_group)
         
-        # 保存ボタン
-        save_btn = QPushButton("設定を保存")
-        save_btn.setStyleSheet(STYLES['button_primary'])
-        save_btn.clicked.connect(self.save_settings)
-        layout.addWidget(save_btn)
-        
         layout.addStretch()
         
         scroll_area.setWidget(widget)
@@ -495,8 +511,32 @@ class MainDialog(QDialog):
         
         self.settings.sync()
         
-        QMessageBox.information(self, "保存完了", "設定を保存しました。")
-    
+        QMessageBox.information(self, "保存完了", "設定を保存しました。")    
+    def reset_settings_to_default(self):
+        """設定を既定値に戻す"""
+        reply = QMessageBox.question(
+            self, "確認", "全ての設定を既定値に戻しますか？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            # 既定値を設定
+            self.homepage_input.setText("https://www.google.com")
+            self.startup_combo.setCurrentIndex(0)
+            self.save_session_check.setChecked(True)
+            self.search_engine_combo.setCurrentIndex(0)
+            self.clear_on_exit_check.setChecked(False)
+            self.download_dir_input.setText(str(DOWNLOADS_DIR))
+            self.ask_download_check.setChecked(True)
+            self.javascript_check.setChecked(True)
+            self.fullscreen_check.setChecked(True)
+            self.images_check.setChecked(True)
+            self.hardware_acceleration_check.setChecked(True)
+            self.ua_preset_combo.setCurrentIndex(0)
+            self.ua_custom_input.setText("")
+            
+            # 保存
+            self.save_settings()
+
     def load_history(self):
         history = self.history_manager.get_history(500)
         self.display_history(history)
