@@ -20,7 +20,7 @@ import qtawesome as qta
 
 from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR, USER_AGENT_PRESETS
 from managers import HistoryManager, BookmarkManager, DownloadManager, SessionManager, UpdateChecker
-from dialogs import AddBookmarkDialog, MainDialog, FindDialog
+from dialogs import AddBookmarkDialog, MainDialog, FindDialog, SavePageDialog
 
 
 from PySide6.QtCore import QUrl, Signal
@@ -147,7 +147,8 @@ class VerticalTabBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
         self.tabs = []
-        self._temp_pages = []  # 一時的なページの参照を保持（ガベージコレクション対策）
+        self._temp_pages = []
+        self._last_closed_url = None  # 最後に閉じたタブのURL
         
         # 永続化プロファイルを作成（Cookie、LocalStorageなどが保存される）
         from constants import DATA_DIR
@@ -301,16 +302,31 @@ class VerticalTabBrowser(QMainWindow):
         self.update_checker.start()
     
     def show_update_notification(self, latest_version, message):
-        """更新通知"""
+        """更新通知（今すぐ更新 / 後で確認）"""
+        from constants import BROWSER_TARGET_Architecture
+        
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("更新が利用可能です")
         msg_box.setIcon(QMessageBox.Information)
-        msg_box.setText(f"<h3>VELAの新しいバージョン({latest_version}) が利用可能です</h3>")
+        msg_box.setText(f"<h3>VELAの新しいバージョン ({latest_version}) が利用可能です</h3>")
         msg_box.setInformativeText(
             f"<p>現在のバージョン: {BROWSER_VERSION_SEMANTIC}<br>最新のバージョン: {latest_version}</p>"
             f"<p><b>更新内容:</b></p><p>{message}</p>"
         )
+        
+        update_btn = msg_box.addButton("今すぐ更新", QMessageBox.AcceptRole)
+        later_btn  = msg_box.addButton("後で確認",   QMessageBox.RejectRole)
+        msg_box.setDefaultButton(update_btn)
+        
         msg_box.exec()
+        
+        if msg_box.clickedButton() == update_btn:
+            download_url = (
+                f"https://github.com/ABATBeliever/VELABrowser2x/releases/download/"
+                f"{latest_version}/VELA-{BROWSER_TARGET_Architecture}.zip"
+            )
+            self.add_new_tab(download_url, activate=True)
+            print(f"[INFO] UpdateCheck-> Opening download URL: {download_url}")
     
     def show_menu(self):
         """メニューを表示"""
@@ -351,12 +367,22 @@ class VerticalTabBrowser(QMainWindow):
         find_action.triggered.connect(self.find_in_page)
         menu.addAction(find_action)
         
+        # ページを保存
+        save_page_action = QAction(qta.icon('fa5s.camera', color='#666'), "ページを保存", self)
+        save_page_action.triggered.connect(self.save_page)
+        menu.addAction(save_page_action)
+        
         menu.addSeparator()
         
-        # 設定
+        # 設定（設定タブを開く）
         settings_action = QAction(qta.icon('fa5s.cog', color='#666'), "設定", self)
         settings_action.triggered.connect(self.show_main_dialog)
         menu.addAction(settings_action)
+        
+        # ブラウザについて
+        about_action = QAction(qta.icon('fa5s.info-circle', color='#666'), "ブラウザについて", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        menu.addAction(about_action)
         
         menu.addSeparator()
         
@@ -404,7 +430,7 @@ class VerticalTabBrowser(QMainWindow):
             dialog.exec()
     
     def show_main_dialog(self):
-        """メインダイアログ表示"""
+        """設定ダイアログ表示（設定タブ）"""
         old_settings = {
             "javascript": self.settings.value("enable_javascript", True, type=bool),
             "images": self.settings.value("auto_load_images", True, type=bool),
@@ -416,6 +442,7 @@ class VerticalTabBrowser(QMainWindow):
         
         dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
         dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
+        dialog.show_settings_tab()
         dialog.exec()
         
         new_settings = {
@@ -427,7 +454,6 @@ class VerticalTabBrowser(QMainWindow):
             "ua_custom": self.settings.value("ua_custom", "")
         }
         
-        # 設定変更があれば再起動を提案
         if old_settings != new_settings:
             reply = QMessageBox.question(
                 self,
@@ -436,20 +462,32 @@ class VerticalTabBrowser(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes
             )
-            
             if reply == QMessageBox.Yes:
                 self.save_current_session()
                 QApplication.quit()
             else:
-                # 一部の設定のみ即座に適用を試みる
                 self.apply_settings()
+    
+    def show_about_dialog(self):
+        """ブラウザについてダイアログ表示"""
+        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
+        dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
+        dialog.show_about_tab()
+        dialog.exec()
     
     def show_download_dialog(self):
         """ダウンロードマネージャー表示"""
         dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
         dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
-        dialog.show_download_tab()  # ダウンロードタブを表示
+        dialog.show_download_tab()
         dialog.exec()
+    
+    def save_page(self):
+        """ページを保存（PNG / PDF）"""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem):
+            dialog = SavePageDialog(current_item.web_view, self)
+            dialog.exec()
     
     def add_bookmark_from_current_tab(self):
         """現在のタブをブックマークに追加"""
@@ -480,9 +518,26 @@ class VerticalTabBrowser(QMainWindow):
         
         # 新規タブボタン（横幅いっぱいに拡張）
         new_tab_btn = QPushButton()
-        new_tab_btn.setIcon(qta.icon('fa5s.plus', color='#0078d4'))
+        new_tab_btn.setIcon(qta.icon('fa5s.plus', color='#2e2e2e'))
         new_tab_btn.setToolTip("新規タブ")
         new_tab_btn.setMinimumHeight(36)
+        new_tab_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                color: #2e2e2e;
+                border: 1px solid #dcdfe3;
+                border-radius: 4px;
+                padding: 6px 8px;
+            }
+            QPushButton:hover {
+                background-color: #eaf2fb;
+                border-color: #4a90d9;
+                color: #1f5fa5;
+            }
+            QPushButton:pressed {
+                background-color: #d6e8fa;
+            }
+        """)
         new_tab_btn.clicked.connect(lambda: self.add_new_tab(self.settings.value("homepage", "https://www.google.com")))
         layout.addWidget(new_tab_btn)
         
@@ -730,6 +785,11 @@ class VerticalTabBrowser(QMainWindow):
         close_action.triggered.connect(lambda: self.close_tab_by_item(item))
         menu.addAction(close_action)
         
+        # 閉じたタブを開く
+        reopen_action = QAction(qta.icon('fa5s.undo', color='#666'), "閉じたタブを開く", self)
+        reopen_action.triggered.connect(self.reopen_closed_tab)
+        menu.addAction(reopen_action)
+        
         # タブを複製
         duplicate_action = QAction(qta.icon('fa5s.clone', color='#0078d4'), "タブを複製", self)
         duplicate_action.triggered.connect(lambda: self.duplicate_tab(item))
@@ -769,12 +829,27 @@ class VerticalTabBrowser(QMainWindow):
         # タブのインデックスを取得
         for i in range(self.tab_list.count()):
             if self.tab_list.item(i) == item:
+                # 閉じる前にURLを保存
+                url = item.web_view.url().toString()
+                if url and not url.startswith("about:") and not url.startswith("chrome:"):
+                    self._last_closed_url = url
                 self.tab_list.takeItem(i)
                 item.web_view.deleteLater()
                 if item.web_view in self.tabs:
                     self.tabs.remove(item.web_view)
                 print("[INFO] TabControl: Close")
                 break
+    
+    def reopen_closed_tab(self):
+        """最後に閉じたタブを開く（なければホームページ）"""
+        if self._last_closed_url:
+            url = self._last_closed_url
+            self._last_closed_url = None  # 一度使ったらクリア
+            self.add_new_tab(url, activate=True)
+            print(f"[INFO] TabControl: Reopen - {url}")
+        else:
+            self.add_new_tab(self.settings.value("homepage", "https://www.google.com"), activate=True)
+            print("[INFO] TabControl: Reopen (no history, opening homepage)")
     
     def duplicate_tab(self, item):
         """タブを複製"""

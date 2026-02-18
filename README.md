@@ -1,7 +1,7 @@
 # VELA Browser Praxis (VELA 2.x)
 
 ![License](https://img.shields.io/badge/license-LGPLv3-blue.svg)
-![Version](https://img.shields.io/badge/version-2.0.1.0-green.svg)
+![Version](https://img.shields.io/badge/version-2.0.2.0-green.svg)
 ![Version](https://img.shields.io/badge/Language-Python-yellow.svg)
 
 ---

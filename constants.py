@@ -11,8 +11,8 @@ from pathlib import Path
 # =====================================================================
 BROWSER_NAME = "VELA"
 BROWSER_CODENAME = "Praxis"
-BROWSER_VERSION_SEMANTIC = "2.0.1.0"
-BROWSER_VERSION_NAME = "2.0.1.0 Stable"
+BROWSER_VERSION_SEMANTIC = "2.0.2.0"
+BROWSER_VERSION_NAME = "2.0.2.0 Stable"
 BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
 
 def detect_browser_target_architecture():

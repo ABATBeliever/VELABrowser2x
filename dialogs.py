@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QLabel, QComboBox, QFrame, QMessageBox, QTabWidget,
-    QTextEdit, QCheckBox, QSpinBox, QGroupBox, QScrollArea,
+    QTextEdit, QCheckBox, QRadioButton, QSpinBox, QGroupBox, QScrollArea,
     QFormLayout, QFileDialog, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QTreeWidget, QTreeWidgetItem,
     QProgressBar
@@ -766,7 +766,15 @@ class MainDialog(QDialog):
     
     def show_download_tab(self):
         """ダウンロードタブを表示"""
-        self.tab_widget.setCurrentIndex(4)  # ダウンロードタブ（5番目）を選択
+        self.tab_widget.setCurrentIndex(4)
+
+    def show_settings_tab(self):
+        """設定タブを表示"""
+        self.tab_widget.setCurrentIndex(1)
+
+    def show_about_tab(self):
+        """ブラウザについてタブを表示"""
+        self.tab_widget.setCurrentIndex(0)
 
 
 # =====================================================================
@@ -834,6 +842,166 @@ class DownloadDialog(QDialog):
             }
             state = state_map.get(download.state(), "不明")
             self.download_table.setItem(i, 3, QTableWidgetItem(state))
+
+
+# =====================================================================
+# ページ保存ダイアログ
+# =====================================================================
+
+class SavePageDialog(QDialog):
+    """ページ保存ダイアログ（PNG / PDF 選択）"""
+
+    def __init__(self, web_view, parent=None):
+        super().__init__(parent)
+        self.web_view = web_view
+        self._is_saving = False
+        self.setWindowTitle("ページを保存")
+        self.setMinimumWidth(420)
+        self.setWindowFlags(Qt.Dialog)
+        self.init_ui()
+
+    def init_ui(self):
+        self.setStyleSheet(STYLES['dialog'])
+
+        # ---- 選択画面 ----
+        self.select_widget = QWidget()
+        select_layout = QVBoxLayout(self.select_widget)
+        select_layout.setContentsMargins(20, 20, 20, 20)
+        select_layout.setSpacing(14)
+
+        title_label = QLabel("<h3>ページを保存</h3>")
+        select_layout.addWidget(title_label)
+
+        format_group = QGroupBox("保存形式")
+        format_layout = QVBoxLayout()
+        self.png_radio = QRadioButton("PNG 画像  （現在の表示エリアをキャプチャ）")
+        self.pdf_radio = QRadioButton("PDF ドキュメント  （ページ全体を出力）")
+        self.png_radio.setChecked(True)
+        format_layout.addWidget(self.png_radio)
+        format_layout.addWidget(self.pdf_radio)
+        format_group.setLayout(format_layout)
+        select_layout.addWidget(format_group)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        select_layout.addWidget(line)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        cancel_btn = QPushButton("キャンセル")
+        cancel_btn.setMinimumWidth(100)
+        cancel_btn.setStyleSheet(STYLES['button_secondary'])
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        save_btn = QPushButton("次へ（保存先を指定）")
+        save_btn.setMinimumWidth(160)
+        save_btn.setStyleSheet(STYLES['button_primary'])
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self.proceed_to_save)
+        button_layout.addWidget(save_btn)
+        select_layout.addLayout(button_layout)
+
+        # ---- 出力中画面 ----
+        self.saving_widget = QWidget()
+        saving_layout = QVBoxLayout(self.saving_widget)
+        saving_layout.setContentsMargins(20, 30, 20, 30)
+        saving_layout.setSpacing(20)
+
+        saving_title = QLabel("<h3>出力中です...</h3>")
+        saving_title.setAlignment(Qt.AlignCenter)
+        saving_layout.addWidget(saving_title)
+
+        self.saving_info_label = QLabel("")
+        self.saving_info_label.setAlignment(Qt.AlignCenter)
+        self.saving_info_label.setStyleSheet("color: #666666; font-size: 10pt;")
+        self.saving_info_label.setWordWrap(True)
+        saving_layout.addWidget(self.saving_info_label)
+
+        saving_progress = QProgressBar()
+        saving_progress.setMinimum(0)
+        saving_progress.setMaximum(0)
+        saving_layout.addWidget(saving_progress)
+
+        note_label = QLabel("完了するまでこのウィンドウは閉じられません。")
+        note_label.setAlignment(Qt.AlignCenter)
+        note_label.setStyleSheet("color: #999999; font-size: 9pt;")
+        saving_layout.addWidget(note_label)
+
+        # ---- 重ねて配置 ----
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(self.select_widget)
+        outer_layout.addWidget(self.saving_widget)
+        self.saving_widget.setVisible(False)
+
+    def _show_saving_screen(self, filepath):
+        self._is_saving = True
+        self.saving_info_label.setText(f"保存先: {filepath}")
+        self.select_widget.setVisible(False)
+        self.saving_widget.setVisible(True)
+        self.setMinimumHeight(0)
+        self.adjustSize()
+
+    def _restore_select_screen(self):
+        self._is_saving = False
+        self.saving_widget.setVisible(False)
+        self.select_widget.setVisible(True)
+        self.adjustSize()
+
+    def closeEvent(self, event):
+        if self._is_saving:
+            event.ignore()
+        else:
+            event.accept()
+
+    def proceed_to_save(self):
+        if self.png_radio.isChecked():
+            self._save_png()
+        else:
+            self._save_pdf()
+
+    def _save_png(self):
+        filepath, _ = QFileDialog.getSaveFileName(self, "PNG として保存", "", "PNG Images (*.png)")
+        if not filepath:
+            return
+        if not filepath.lower().endswith(".png"):
+            filepath += ".png"
+        self._show_saving_screen(filepath)
+        pixmap = self.web_view.grab()
+        self._is_saving = False
+        if pixmap.save(filepath, "PNG"):
+            QMessageBox.information(self, "保存完了", f"PNG を保存しました:\n{filepath}")
+            self.accept()
+        else:
+            QMessageBox.warning(self, "エラー", "PNG の保存に失敗しました。")
+            self._restore_select_screen()
+
+    def _save_pdf(self):
+        filepath, _ = QFileDialog.getSaveFileName(self, "PDF として保存", "", "PDF Documents (*.pdf)")
+        if not filepath:
+            return
+        if not filepath.lower().endswith(".pdf"):
+            filepath += ".pdf"
+        self._show_saving_screen(filepath)
+        try:
+            self.web_view.page().pdfPrintingFinished.connect(self._on_pdf_finished)
+        except Exception:
+            pass
+        self.web_view.page().printToPdf(filepath)
+
+    def _on_pdf_finished(self, filepath, success):
+        try:
+            self.web_view.page().pdfPrintingFinished.disconnect(self._on_pdf_finished)
+        except Exception:
+            pass
+        self._is_saving = False
+        if success:
+            QMessageBox.information(self, "保存完了", f"PDF を保存しました:\n{filepath}")
+            self.accept()
+        else:
+            QMessageBox.warning(self, "エラー", "PDF の保存に失敗しました。")
+            self._restore_select_screen()
 
 
 # =====================================================================
