@@ -1,7 +1,7 @@
 # VELA Browser Praxis (VELA 2.x)
 
 ![License](https://img.shields.io/badge/license-LGPLv3-blue.svg)
-![Version](https://img.shields.io/badge/version-2.0.2.0-green.svg)
+![Version](https://img.shields.io/badge/version-2.0.3.0-green.svg)
 ![Version](https://img.shields.io/badge/Language-Python-yellow.svg)
 
 ---
@@ -66,6 +66,7 @@ VELA Browser は **GNU Lesser General Public License (LGPL)** に基づいて配
 - **リポジトリ:** [https://github.com/ABATBeliever/VELA-Browser](https://github.com/ABATBeliever/VELABrowser2x)  
 - **問題報告:** [https://github.com/ABATBeliever/VELA-Browser/issues](https://github.com/ABATBeliever/VELABrowser2x/issues)  
 - **公式ページ:** [https://abatbeliever.net/app/VELABrowser/](https://abatbeliever.net/app/VELABrowser/)
+
 
 
 
