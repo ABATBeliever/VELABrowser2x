@@ -11,8 +11,8 @@ from pathlib import Path
 # =====================================================================
 BROWSER_NAME = "VELA"
 BROWSER_CODENAME = "Praxis"
-BROWSER_VERSION_SEMANTIC = "2.0.2.0"
-BROWSER_VERSION_NAME = "2.0.2.0 Stable"
+BROWSER_VERSION_SEMANTIC = "2.0.3.0"
+BROWSER_VERSION_NAME = "2.0.3.0 Stable"
 BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
 
 def detect_browser_target_architecture():
@@ -417,6 +417,31 @@ STYLES = {
             height: 1px;
             background-color: #dcdfe3;
             margin: 4px 0px;
+        }
+    """,
+
+    # シークレットタブ用のラベルスタイル
+    'incognito_title_label': """
+        QLabel {
+            background: transparent;
+            color: #8a2be2;
+            padding: 0px;
+            font-size: 10pt;
+        }
+    """,
+
+    # ロード進捗バー（URLバー下部）
+    'load_progress_bar': """
+        QProgressBar {
+            border: none;
+            border-radius: 0px;
+            background-color: transparent;
+            max-height: 3px;
+            min-height: 3px;
+        }
+        QProgressBar::chunk {
+            background-color: #4a90d9;
+            border-radius: 0px;
         }
     """
 }

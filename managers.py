@@ -31,78 +31,85 @@ class HistoryManager:
         self.init_database()
     
     def init_database(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                url TEXT NOT NULL,
-                title TEXT,
-                visit_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                visit_count INTEGER DEFAULT 1
-            )
-        ''')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_url ON history(url)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_visit_time ON history(visit_time DESC)')
-        conn.commit()
-        conn.close()
-        print("[INFO] History database initialized")
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        url TEXT NOT NULL,
+                        title TEXT,
+                        visit_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        visit_count INTEGER DEFAULT 1
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_url ON history(url)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_visit_time ON history(visit_time DESC)')
+                conn.commit()
+            print("[INFO] History database initialized")
+        except sqlite3.Error as e:
+            print(f"[ERROR] History database init failed: {e}")
     
     def add_history(self, url, title):
         if not url or url.startswith("about:") or url.startswith("chrome:"):
             return
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, visit_count FROM history WHERE url = ?', (url,))
-        result = cursor.fetchone()
-        
-        if result:
-            cursor.execute('''
-                UPDATE history 
-                SET title = ?, visit_time = CURRENT_TIMESTAMP, visit_count = ?
-                WHERE id = ?
-            ''', (title, result[1] + 1, result[0]))
-        else:
-            cursor.execute('INSERT INTO history (url, title) VALUES (?, ?)', (url, title))
-        
-        conn.commit()
-        conn.close()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT id, visit_count FROM history WHERE url = ?', (url,))
+                result = cursor.fetchone()
+                if result:
+                    cursor.execute('''
+                        UPDATE history 
+                        SET title = ?, visit_time = CURRENT_TIMESTAMP, visit_count = ?
+                        WHERE id = ?
+                    ''', (title, result[1] + 1, result[0]))
+                else:
+                    cursor.execute('INSERT INTO history (url, title) VALUES (?, ?)', (url, title))
+                conn.commit()
+        except sqlite3.Error as e:
+            print(f"[ERROR] add_history failed: {e}")
     
     def get_history(self, limit=100):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT url, title, visit_time, visit_count 
-            FROM history 
-            ORDER BY visit_time DESC 
-            LIMIT ?
-        ''', (limit,))
-        results = cursor.fetchall()
-        conn.close()
-        return results
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT url, title, visit_time, visit_count 
+                    FROM history 
+                    ORDER BY visit_time DESC 
+                    LIMIT ?
+                ''', (limit,))
+                return cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"[ERROR] get_history failed: {e}")
+            return []
     
     def search_history(self, query, limit=50):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT url, title, visit_time, visit_count 
-            FROM history 
-            WHERE url LIKE ? OR title LIKE ?
-            ORDER BY visit_time DESC 
-            LIMIT ?
-        ''', (f'%{query}%', f'%{query}%', limit))
-        results = cursor.fetchall()
-        conn.close()
-        return results
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT url, title, visit_time, visit_count 
+                    FROM history 
+                    WHERE url LIKE ? OR title LIKE ?
+                    ORDER BY visit_time DESC 
+                    LIMIT ?
+                ''', (f'%{query}%', f'%{query}%', limit))
+                return cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"[ERROR] search_history failed: {e}")
+            return []
     
     def clear_history(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM history')
-        conn.commit()
-        conn.close()
-        print("[INFO] History cleared")
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM history')
+                conn.commit()
+            print("[INFO] History cleared")
+        except sqlite3.Error as e:
+            print(f"[ERROR] clear_history failed: {e}")
 
 
 # =====================================================================
@@ -117,55 +124,66 @@ class BookmarkManager:
         self.init_database()
     
     def init_database(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS bookmarks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                url TEXT NOT NULL,
-                folder TEXT DEFAULT 'root',
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        conn.close()
-        print("[INFO] Bookmarks database initialized")
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS bookmarks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        folder TEXT DEFAULT 'root',
+                        created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                conn.commit()
+            print("[INFO] Bookmarks database initialized")
+        except sqlite3.Error as e:
+            print(f"[ERROR] Bookmarks database init failed: {e}")
     
     def add_bookmark(self, title, url, folder='root'):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO bookmarks (title, url, folder) VALUES (?, ?, ?)', 
-                      (title, url, folder))
-        conn.commit()
-        conn.close()
-        print(f"[INFO] Bookmark added: {title}")
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('INSERT INTO bookmarks (title, url, folder) VALUES (?, ?, ?)', 
+                              (title, url, folder))
+                conn.commit()
+            print(f"[INFO] Bookmark added: {title}")
+        except sqlite3.Error as e:
+            print(f"[ERROR] add_bookmark failed: {e}")
     
     def get_bookmarks(self, folder=None):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        if folder:
-            cursor.execute('SELECT id, title, url, folder FROM bookmarks WHERE folder = ?', (folder,))
-        else:
-            cursor.execute('SELECT id, title, url, folder FROM bookmarks')
-        results = cursor.fetchall()
-        conn.close()
-        return results
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                if folder:
+                    cursor.execute('SELECT id, title, url, folder FROM bookmarks WHERE folder = ?', (folder,))
+                else:
+                    cursor.execute('SELECT id, title, url, folder FROM bookmarks')
+                return cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"[ERROR] get_bookmarks failed: {e}")
+            return []
     
     def get_folders(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT DISTINCT folder FROM bookmarks')
-        results = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return results if results else ['root']
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT DISTINCT folder FROM bookmarks')
+                results = [row[0] for row in cursor.fetchall()]
+            return results if results else ['root']
+        except sqlite3.Error as e:
+            print(f"[ERROR] get_folders failed: {e}")
+            return ['root']
     
     def delete_bookmark(self, bookmark_id):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM bookmarks WHERE id = ?', (bookmark_id,))
-        conn.commit()
-        conn.close()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM bookmarks WHERE id = ?', (bookmark_id,))
+                conn.commit()
+        except sqlite3.Error as e:
+            print(f"[ERROR] delete_bookmark failed: {e}")
     
     def export_html(self, filepath):
         """HTML形式でエクスポート（Netscape Bookmark File Format）"""
@@ -249,110 +267,100 @@ class DownloadManager:
         self.init_database()
     
     def init_database(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS downloads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT NOT NULL,
-                url TEXT NOT NULL,
-                download_path TEXT,
-                total_bytes INTEGER DEFAULT 0,
-                received_bytes INTEGER DEFAULT 0,
-                state INTEGER DEFAULT 0,
-                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                finish_time TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        conn.close()
-        print("[INFO] Downloads database initialized")
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS downloads (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        filename TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        download_path TEXT,
+                        total_bytes INTEGER DEFAULT 0,
+                        received_bytes INTEGER DEFAULT 0,
+                        state INTEGER DEFAULT 0,
+                        start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        finish_time TIMESTAMP
+                    )
+                ''')
+                conn.commit()
+            print("[INFO] Downloads database initialized")
+        except sqlite3.Error as e:
+            print(f"[ERROR] Downloads database init failed: {e}")
     
     def add_download(self, download_item):
         """ダウンロードをメモリとDBに追加"""
         self.downloads.append(download_item)
         
-        # ファイルの完全パスを取得
         download_path = download_item.downloadDirectory()
         filename = download_item.downloadFileName()
+        download_id = None
         
-        # DBに保存
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO downloads (filename, url, download_path, total_bytes, received_bytes, state)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            filename,
-            download_item.url().toString(),
-            download_path,
-            download_item.totalBytes(),
-            download_item.receivedBytes(),
-            download_item.state().value  # .valueで整数値を取得
-        ))
-        download_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO downloads (filename, url, download_path, total_bytes, received_bytes, state)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    filename,
+                    download_item.url().toString(),
+                    download_path,
+                    download_item.totalBytes(),
+                    download_item.receivedBytes(),
+                    download_item.state().value
+                ))
+                download_id = cursor.lastrowid
+                conn.commit()
+            print(f"[INFO] Download added to DB with ID {download_id}: {filename}")
+        except sqlite3.Error as e:
+            print(f"[ERROR] add_download DB insert failed: {e}")
         
-        print(f"[INFO] Download added to DB with ID {download_id}: {filename}")
-        
-        # ダウンロード進捗の更新をDBに反映
-        download_item.receivedBytesChanged.connect(
-            lambda: self.update_download_progress(download_id, download_item)
-        )
-        download_item.stateChanged.connect(
-            lambda state: self.update_download_state(download_id, download_item, state)
-        )
+        if download_id is not None:
+            download_item.receivedBytesChanged.connect(
+                lambda: self.update_download_progress(download_id, download_item)
+            )
+            download_item.stateChanged.connect(
+                lambda state: self.update_download_state(download_id, download_item, state)
+            )
         
         print(f"[INFO] Download started: {filename}")
     
     def update_download_progress(self, download_id, download_item):
         """ダウンロード進捗をDBに更新"""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE downloads 
-                SET received_bytes = ?, total_bytes = ?
-                WHERE id = ?
-            ''', (download_item.receivedBytes(), download_item.totalBytes(), download_id))
-            conn.commit()
-            conn.close()
-            print(f"[DEBUG] Download progress updated: {download_id}, {download_item.receivedBytes()}/{download_item.totalBytes()}")
-        except Exception as e:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE downloads 
+                    SET received_bytes = ?, total_bytes = ?
+                    WHERE id = ?
+                ''', (download_item.receivedBytes(), download_item.totalBytes(), download_id))
+                conn.commit()
+        except sqlite3.Error as e:
             print(f"[ERROR] Failed to update download progress: {e}")
     
     def update_download_state(self, download_id, download_item, state):
         """ダウンロード状態をDBに更新"""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # DownloadStateの値を取得
-            if hasattr(state, 'value'):
-                state_value = state.value
-            else:
-                state_value = int(state)
-            
-            # 完了時は終了時刻も記録
-            if state_value == 2:  # DownloadCompleted
-                cursor.execute('''
-                    UPDATE downloads 
-                    SET state = ?, received_bytes = ?, finish_time = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                ''', (state_value, download_item.receivedBytes(), download_id))
-                print(f"[INFO] Download completed: {download_id}")
-            else:
-                cursor.execute('''
-                    UPDATE downloads 
-                    SET state = ?
-                    WHERE id = ?
-                ''', (state_value, download_id))
-                print(f"[DEBUG] Download state updated: {download_id}, state={state_value}")
-            
-            conn.commit()
-            conn.close()
-        except Exception as e:
+            state_value = state.value if hasattr(state, 'value') else int(state)
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                if state_value == 2:  # DownloadCompleted
+                    cursor.execute('''
+                        UPDATE downloads 
+                        SET state = ?, received_bytes = ?, finish_time = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    ''', (state_value, download_item.receivedBytes(), download_id))
+                    print(f"[INFO] Download completed: {download_id}")
+                else:
+                    cursor.execute('''
+                        UPDATE downloads 
+                        SET state = ?
+                        WHERE id = ?
+                    ''', (state_value, download_id))
+                conn.commit()
+        except sqlite3.Error as e:
             print(f"[ERROR] Failed to update download state: {e}")
     
     def get_downloads(self):
@@ -361,26 +369,30 @@ class DownloadManager:
     
     def get_download_history(self, limit=100):
         """ダウンロード履歴をDBから取得"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT filename, url, download_path, total_bytes, received_bytes, state, start_time, finish_time
-            FROM downloads
-            ORDER BY start_time DESC
-            LIMIT ?
-        ''', (limit,))
-        results = cursor.fetchall()
-        conn.close()
-        return results
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT filename, url, download_path, total_bytes, received_bytes, state, start_time, finish_time
+                    FROM downloads
+                    ORDER BY start_time DESC
+                    LIMIT ?
+                ''', (limit,))
+                return cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"[ERROR] get_download_history failed: {e}")
+            return []
     
     def clear_download_history(self):
         """ダウンロード履歴をクリア"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM downloads')
-        conn.commit()
-        conn.close()
-        print("[INFO] Download history cleared")
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM downloads')
+                conn.commit()
+            print("[INFO] Download history cleared")
+        except sqlite3.Error as e:
+            print(f"[ERROR] clear_download_history failed: {e}")
 
 
 # =====================================================================

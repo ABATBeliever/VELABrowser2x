@@ -511,7 +511,15 @@ class MainDialog(QDialog):
         
         self.settings.sync()
         
-        QMessageBox.information(self, "保存完了", "設定を保存しました。")    
+        # 親ブラウザに設定を即時反映
+        from browser import VerticalTabBrowser
+        browser = self.parent()
+        while browser and not isinstance(browser, VerticalTabBrowser):
+            browser = browser.parent()
+        if browser:
+            browser.apply_settings()
+        
+        QMessageBox.information(self, "保存完了", "設定を保存しました。一部の設定は再起動後に完全に有効になります。")
     def reset_settings_to_default(self):
         """設定を既定値に戻す"""
         reply = QMessageBox.question(

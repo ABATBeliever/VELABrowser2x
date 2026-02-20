@@ -7,15 +7,15 @@ import re
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from PySide6.QtCore import Qt, QUrl, QSettings
+from PySide6.QtCore import Qt, QUrl, QSettings, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLineEdit, QListWidget, QSplitter, QToolBar, QMessageBox,
-    QFileDialog, QApplication, QMenu, QLabel
+    QFileDialog, QApplication, QMenu, QLabel, QProgressBar
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
-from PySide6.QtGui import QFont, QAction
+from PySide6.QtGui import QFont, QAction, QShortcut, QKeySequence
 import qtawesome as qta
 
 from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR, USER_AGENT_PRESETS
@@ -72,8 +72,9 @@ class TabItemWidget(QWidget):
     """タブアイテム用のカスタムウィジェット（タイトル＋閉じるボタン）"""
     close_requested = Signal()
     
-    def __init__(self, title, parent=None):
+    def __init__(self, title, parent=None, incognito=False):
         super().__init__(parent)
+        self._incognito = incognito
         self.init_ui(title)
     
     def init_ui(self, title):
@@ -85,6 +86,13 @@ class TabItemWidget(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
         
+        # シークレットアイコン（シークレットタブのみ）
+        if self._incognito:
+            self.incognito_icon = QLabel()
+            self.incognito_icon.setPixmap(qta.icon('fa5s.user-secret', color='#8a2be2').pixmap(14, 14))
+            self.incognito_icon.setStyleSheet("background: transparent; padding: 0px;")
+            layout.addWidget(self.incognito_icon)
+        
         # ミュートアイコン（初期状態では非表示）
         self.mute_icon = QLabel()
         self.mute_icon.setPixmap(qta.icon('fa5s.volume-mute', color='#666').pixmap(12, 12))
@@ -94,14 +102,17 @@ class TabItemWidget(QWidget):
         
         # タイトルラベル
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("""
-            QLabel {
-                background: transparent;
-                color: #2e2e2e;
-                padding: 0px;
-                font-size: 10pt;
-            }
-        """)
+        if self._incognito:
+            self.title_label.setStyleSheet(STYLES['incognito_title_label'])
+        else:
+            self.title_label.setStyleSheet("""
+                QLabel {
+                    background: transparent;
+                    color: #2e2e2e;
+                    padding: 0px;
+                    font-size: 10pt;
+                }
+            """)
         self.title_label.setWordWrap(False)
         layout.addWidget(self.title_label, 1)
         
@@ -125,12 +136,13 @@ class TabItemWidget(QWidget):
 class TabItem(QListWidgetItem):
     """タブを表すリストアイテム"""
     
-    def __init__(self, title, web_view):
+    def __init__(self, title, web_view, incognito=False):
         super().__init__()
         self.web_view = web_view
         self.url = web_view.url()
         self.is_muted = False
-        self.widget = TabItemWidget(title)
+        self.incognito = incognito  # シークレットタブフラグ
+        self.widget = TabItemWidget(title, incognito=incognito)
         # サイズヒントを大きめに設定
         self.setSizeHint(self.widget.sizeHint())
         # フラグ設定（選択可能、有効）
@@ -148,7 +160,8 @@ class VerticalTabBrowser(QMainWindow):
         super().__init__()
         self.tabs = []
         self._temp_pages = []
-        self._last_closed_url = None  # 最後に閉じたタブのURL
+        self._closed_tab_stack = []  # 閉じたタブのURLスタック（複数対応）
+        self._opening_pdf_urls = set()  # PDFループ防止: 処理中URLのセット
         
         # 永続化プロファイルを作成（Cookie、LocalStorageなどが保存される）
         from constants import DATA_DIR
@@ -156,9 +169,16 @@ class VerticalTabBrowser(QMainWindow):
         self.profile = QWebEngineProfile("VELAProfile")
         self.profile.setPersistentStoragePath(profile_path)
         self.profile.setCachePath(str(DATA_DIR / "cache"))
-        
-        # 永続化を有効にする
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
+        
+        # シークレット用プロファイル（非永続）
+        # 引数なしの QWebEngineProfile() はWindows上でキャッシュパス競合エラーが出るため
+        # 専用の一時パスを指定した名前付きプロファイルを使い、Cookieのみ非永続にする
+        self.incognito_profile = QWebEngineProfile("VELAIncognito")
+        incognito_cache = str(DATA_DIR / "incognito_cache")
+        self.incognito_profile.setCachePath(incognito_cache)
+        self.incognito_profile.setPersistentStoragePath(str(DATA_DIR / "incognito_storage"))
+        self.incognito_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
         
         self.history_manager = HistoryManager()
         self.bookmark_manager = BookmarkManager()
@@ -168,6 +188,7 @@ class VerticalTabBrowser(QMainWindow):
         
         self.apply_settings()
         self.init_ui()
+        self.setup_shortcuts()
         self.check_for_updates()
         self.restore_session()
     
@@ -181,11 +202,21 @@ class VerticalTabBrowser(QMainWindow):
                                  self.settings.value("enable_javascript", True, type=bool))
         web_settings.setAttribute(QWebEngineSettings.AutoLoadImages,
                                  self.settings.value("auto_load_images", True, type=bool))
+        # PDFをブラウザ内で表示（ダウンロードしない）
+        web_settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
         
         # ハードウェアアクセラレーション設定
         if not self.settings.value("enable_hardware_acceleration", True, type=bool):
             web_settings.setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, False)
             web_settings.setAttribute(QWebEngineSettings.WebGLEnabled, False)
+        
+        # シークレットプロファイルにも同設定を適用
+        incognito_settings = self.incognito_profile.settings()
+        incognito_settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
+        incognito_settings.setAttribute(QWebEngineSettings.JavascriptEnabled,
+                                       self.settings.value("enable_javascript", True, type=bool))
+        incognito_settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)
+        incognito_settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
         
         # UserAgent設定
         ua_preset = self.settings.value("ua_preset", 0, type=int)
@@ -194,26 +225,61 @@ class VerticalTabBrowser(QMainWindow):
                 ua = self.settings.value("ua_custom", "")
             else:
                 ua = USER_AGENT_PRESETS.get(ua_preset, "")
-            
             if ua:
                 self.profile.setHttpUserAgent(ua)
                 print(f"[INFO] UserAgent set to preset {ua_preset}")
         
+        # downloadRequested の重複接続を防ぐために一度切断してから接続
+        try:
+            self.profile.downloadRequested.disconnect(self.on_download_requested)
+        except RuntimeError:
+            pass
+        try:
+            self.incognito_profile.downloadRequested.disconnect(self.on_download_requested)
+        except RuntimeError:
+            pass
         self.profile.downloadRequested.connect(self.on_download_requested)
+        self.incognito_profile.downloadRequested.connect(self.on_download_requested)
         print("[INFO] Settings applied")
     
     def on_download_requested(self, download):
         """ダウンロード要求時の処理"""
-        print(f"[INFO] Download requested: {download.downloadFileName()}")
+        filename = download.downloadFileName()
+        url = download.url().toString()
+        print(f"[INFO] Download requested: {filename}")
         
+        # PDFはダウンロードせずブラウザ内で表示
+        # ただし既にそのURLをタブで開こうとしている場合はスキップ（無限ループ防止）
+        mime = download.mimeType() if hasattr(download, 'mimeType') else ""
+        is_pdf = (
+            mime == "application/pdf"
+            or filename.lower().endswith(".pdf")
+            or url.lower().endswith(".pdf")
+            or ".pdf?" in url.lower()
+        )
+        if is_pdf and url not in self._opening_pdf_urls:
+            print(f"[INFO] PDF detected, opening in tab: {url}")
+            download.cancel()
+            self._opening_pdf_urls.add(url)
+            self.add_new_tab(url, activate=True)
+            # タブのロード完了後にセットから削除
+            QTimer.singleShot(5000, lambda: self._opening_pdf_urls.discard(url))
+            return
+        
+        # 設定からダウンロード先を取得（constants の DOWNLOADS_DIR ではなく QSettings を優先）
         download_dir = Path(self.settings.value("download_dir", str(DOWNLOADS_DIR)))
-        download_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            download_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(f"[ERROR] Cannot create download directory: {e}")
+            download_dir = DOWNLOADS_DIR
+            download_dir.mkdir(parents=True, exist_ok=True)
         
         if self.settings.value("ask_download", True, type=bool):
             filepath, _ = QFileDialog.getSaveFileName(
                 self,
                 "ファイルを保存",
-                str(download_dir / download.downloadFileName()),
+                str(download_dir / filename),
                 "All Files (*)"
             )
             if filepath:
@@ -221,13 +287,11 @@ class VerticalTabBrowser(QMainWindow):
                 download.setDownloadFileName(Path(filepath).name)
                 download.accept()
                 self.download_manager.add_download(download)
-                # ダウンロード開始時にダウンロードマネージャーを表示
                 self.show_download_dialog()
         else:
             download.setDownloadDirectory(str(download_dir))
             download.accept()
             self.download_manager.add_download(download)
-            # ダウンロード開始時にダウンロードマネージャーを表示
             self.show_download_dialog()
     
     def init_ui(self):
@@ -263,12 +327,25 @@ class VerticalTabBrowser(QMainWindow):
         startup_action = self.settings.value("startup_action", 0, type=int)
         
         if startup_action == 0 and self.settings.value("save_session", True, type=bool):
-            tabs_data = self.session_manager.load_session()
-            if tabs_data:
-                for i, tab_data in enumerate(tabs_data):
-                    self.add_new_tab(tab_data.get("url", "https://www.google.com"), 
-                                   activate=(i == tab_data.get("active_index", 0)))
-                return
+            session_data = self.session_manager.load_session()
+            if session_data:
+                # 新形式: {"tabs": [...], "active_index": N}
+                # 旧形式: [{url, title, active_index}, ...] にも対応
+                if isinstance(session_data, dict):
+                    tabs_data = session_data.get("tabs", [])
+                    active_index = session_data.get("active_index", 0)
+                elif isinstance(session_data, list):
+                    tabs_data = session_data
+                    active_index = tabs_data[0].get("active_index", 0) if tabs_data else 0
+                else:
+                    tabs_data = []
+                    active_index = 0
+                
+                if tabs_data:
+                    for i, tab_data in enumerate(tabs_data):
+                        activate = (i == active_index)
+                        self.add_new_tab(tab_data.get("url", "https://www.google.com"), activate=activate)
+                    return
         
         if startup_action == 1:
             homepage = self.settings.value("homepage", "https://www.google.com")
@@ -284,16 +361,60 @@ class VerticalTabBrowser(QMainWindow):
         tabs_data = []
         current_index = self.tab_list.currentRow()
         
+        # シークレットタブを除外した有効なタブのみ収集
+        normal_tab_indices = []
         for i in range(self.tab_list.count()):
             item = self.tab_list.item(i)
-            if isinstance(item, TabItem):
+            if isinstance(item, TabItem) and not item.incognito:
+                normal_tab_indices.append(i)
                 tabs_data.append({
                     "url": item.web_view.url().toString(),
-                    "title": item.text(),
-                    "active_index": current_index
+                    "title": item.web_view.title() or ""
                 })
         
-        self.session_manager.save_session(tabs_data)
+        # アクティブタブのインデックスを正規化（シークレット除外後のインデックス）
+        active_normal_index = 0
+        for idx, original_i in enumerate(normal_tab_indices):
+            if original_i == current_index:
+                active_normal_index = idx
+                break
+        
+        # active_index はリスト全体に1つだけ付ける
+        result = {"tabs": tabs_data, "active_index": active_normal_index}
+        self.session_manager.save_session(result)
+    
+    def setup_shortcuts(self):
+        """キーボードショートカットを設定"""
+        # Ctrl+T: 新しいタブ
+        QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(
+            lambda: self.add_new_tab(self.settings.value("homepage", "https://www.google.com")))
+        # Ctrl+W: 現在のタブを閉じる
+        QShortcut(QKeySequence("Ctrl+W"), self).activated.connect(self.close_current_tab)
+        # Ctrl+Tab: 次のタブ（下）
+        QShortcut(QKeySequence("Ctrl+Tab"), self).activated.connect(self.switch_to_next_tab)
+        # Ctrl+Shift+Tab: 前のタブ（上）
+        QShortcut(QKeySequence("Ctrl+Shift+Tab"), self).activated.connect(self.switch_to_prev_tab)
+        # Ctrl+F: ページ内検索
+        QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(self.find_in_page)
+        print("[INFO] Shortcuts registered")
+    
+    def switch_to_next_tab(self):
+        """次のタブ（下方向）に切り替え"""
+        count = self.tab_list.count()
+        if count <= 1:
+            return
+        current = self.tab_list.currentRow()
+        next_row = (current + 1) % count
+        self.tab_list.setCurrentRow(next_row)
+    
+    def switch_to_prev_tab(self):
+        """前のタブ（上方向）に切り替え"""
+        count = self.tab_list.count()
+        if count <= 1:
+            return
+        current = self.tab_list.currentRow()
+        prev_row = (current - 1) % count
+        self.tab_list.setCurrentRow(prev_row)
     
     def check_for_updates(self):
         """更新チェック"""
@@ -337,6 +458,12 @@ class VerticalTabBrowser(QMainWindow):
         new_tab_action = QAction(qta.icon('fa5s.plus', color='#4a90d9'), "新しいタブ", self)
         new_tab_action.triggered.connect(lambda: self.add_new_tab(self.settings.value("homepage", "https://www.google.com")))
         menu.addAction(new_tab_action)
+        
+        # シークレットタブ
+        incognito_action = QAction(qta.icon('fa5s.user-secret', color='#8a2be2'), "シークレットタブ", self)
+        incognito_action.triggered.connect(lambda: self.add_new_tab(
+            self.settings.value("homepage", "https://www.google.com"), incognito=True))
+        menu.addAction(incognito_action)
         
         menu.addSeparator()
         
@@ -601,6 +728,21 @@ class VerticalTabBrowser(QMainWindow):
         menu_btn.clicked.connect(self.show_menu)
         toolbar.addWidget(menu_btn)
         
+        # ロード進捗バー（URLバー下部・3pxの細いバー）
+        self.load_progress_bar = QProgressBar()
+        self.load_progress_bar.setStyleSheet(STYLES['load_progress_bar'])
+        self.load_progress_bar.setRange(0, 100)
+        self.load_progress_bar.setValue(0)
+        self.load_progress_bar.setVisible(False)
+        self.load_progress_bar.setTextVisible(False)
+        layout.addWidget(self.load_progress_bar)
+        
+        # 疑似ロード進捗用タイマー
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(80)
+        self._progress_timer.timeout.connect(self._advance_pseudo_progress)
+        self._pseudo_progress = 0
+        
         self.web_container = QWidget()
         self.web_layout = QVBoxLayout(self.web_container)
         self.web_layout.setContentsMargins(0, 0, 0, 0)
@@ -650,22 +792,27 @@ class VerticalTabBrowser(QMainWindow):
         else:
             return self.get_search_url(text)
     
-    def add_new_tab(self, url, activate=True):
+    def add_new_tab(self, url, activate=True, incognito=False):
         """新規タブ追加"""
         web_view = QWebEngineView()
         
-        page = CustomWebEnginePage(self.profile, web_view)
-        page.new_tab_requested.connect(lambda url: self.add_new_tab(url.toString(), activate=True))
+        # シークレットタブは専用プロファイルを使用
+        profile = self.incognito_profile if incognito else self.profile
+        page = CustomWebEnginePage(profile, web_view)
+        page.new_tab_requested.connect(
+            lambda u: self.add_new_tab(u.toString(), activate=True, incognito=incognito))
         page.fullScreenRequested.connect(self.handle_fullscreen_request)
         
         web_view.setPage(page)
         web_view.setUrl(QUrl(url))
         
         web_view.titleChanged.connect(lambda title: self.update_tab_title(web_view, title))
-        web_view.urlChanged.connect(lambda url: self.update_url_bar(web_view, url))
-        web_view.loadFinished.connect(lambda: self.on_load_finished(web_view))
+        web_view.urlChanged.connect(lambda u: self.update_url_bar(web_view, u))
+        web_view.loadFinished.connect(lambda: self.on_load_finished(web_view, incognito))
+        web_view.loadStarted.connect(lambda: self.on_load_started(web_view))
+        web_view.loadProgress.connect(lambda p: self.on_load_progress(web_view, p))
         
-        tab_item = TabItem("新しいタブ", web_view)
+        tab_item = TabItem("新しいタブ", web_view, incognito=incognito)
         
         self.tab_list.addItem(tab_item)
         self.tab_list.setItemWidget(tab_item, tab_item.widget)
@@ -681,6 +828,9 @@ class VerticalTabBrowser(QMainWindow):
         
         if activate:
             self.tab_list.setCurrentItem(tab_item)
+        
+        mode = "シークレット" if incognito else "通常"
+        print(f"[INFO] TabControl: Add ({mode})")
     
     def handle_fullscreen_request(self, request):
         """全画面表示リクエスト処理"""
@@ -691,11 +841,60 @@ class VerticalTabBrowser(QMainWindow):
             print("[INFO] Fullscreen: OFF")
             request.accept()
     
-    def on_load_finished(self, web_view):
+    def on_load_finished(self, web_view, incognito=False):
         """ページ読み込み完了時"""
         url = web_view.url().toString()
         title = web_view.title()
-        self.history_manager.add_history(url, title)
+        # シークレットタブは履歴に記録しない
+        if not incognito:
+            self.history_manager.add_history(url, title)
+        self._stop_progress_bar()
+    
+    def on_load_started(self, web_view):
+        """ページ読み込み開始時"""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem) and current_item.web_view == web_view:
+            self._start_progress_bar()
+    
+    def on_load_progress(self, web_view, progress):
+        """ページ読み込み進捗更新"""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem) and current_item.web_view == web_view:
+            if progress > 0 and progress < 100:
+                self._progress_timer.stop()
+                self.load_progress_bar.setVisible(True)
+                # WebEngineの進捗が取れる場合はそちらを優先、最大85%まで（完了はloadFinishedで消す）
+                display = min(progress, 85)
+                self.load_progress_bar.setValue(display)
+            elif progress == 100:
+                self.load_progress_bar.setValue(100)
+    
+    def _start_progress_bar(self):
+        """ロード開始時に進捗バーをアニメーション開始（疑似進捗）"""
+        self._pseudo_progress = 0
+        self.load_progress_bar.setValue(0)
+        self.load_progress_bar.setVisible(True)
+        self._progress_timer.start()
+    
+    def _advance_pseudo_progress(self):
+        """疑似進捗を少しずつ進める（最大85%で止まる）"""
+        if self._pseudo_progress < 30:
+            self._pseudo_progress += 5
+        elif self._pseudo_progress < 60:
+            self._pseudo_progress += 3
+        elif self._pseudo_progress < 85:
+            self._pseudo_progress += 1
+        else:
+            self._progress_timer.stop()
+            return
+        self.load_progress_bar.setValue(self._pseudo_progress)
+    
+    def _stop_progress_bar(self):
+        """ロード完了時に進捗バーを終了"""
+        self._progress_timer.stop()
+        self.load_progress_bar.setValue(100)
+        # 少し待ってから非表示
+        QTimer.singleShot(300, lambda: self.load_progress_bar.setVisible(False))
     
     def on_tab_changed(self, current, previous):
         """タブ切り替え"""
@@ -714,6 +913,9 @@ class VerticalTabBrowser(QMainWindow):
         web_view.show()
         
         self.url_bar.setText(web_view.url().toString())
+        
+        # ロード進捗バーをリセット
+        self._stop_progress_bar()
         
         # ウィンドウタイトルを更新
         self.update_window_title(web_view.title())
@@ -829,10 +1031,14 @@ class VerticalTabBrowser(QMainWindow):
         # タブのインデックスを取得
         for i in range(self.tab_list.count()):
             if self.tab_list.item(i) == item:
-                # 閉じる前にURLを保存
-                url = item.web_view.url().toString()
-                if url and not url.startswith("about:") and not url.startswith("chrome:"):
-                    self._last_closed_url = url
+                # シークレットタブは閉じたタブスタックに追加しない
+                if not item.incognito:
+                    url = item.web_view.url().toString()
+                    if url and not url.startswith("about:") and not url.startswith("chrome:"):
+                        self._closed_tab_stack.append(url)
+                        # スタックは最大20件
+                        if len(self._closed_tab_stack) > 20:
+                            self._closed_tab_stack.pop(0)
                 self.tab_list.takeItem(i)
                 item.web_view.deleteLater()
                 if item.web_view in self.tabs:
@@ -842,9 +1048,8 @@ class VerticalTabBrowser(QMainWindow):
     
     def reopen_closed_tab(self):
         """最後に閉じたタブを開く（なければホームページ）"""
-        if self._last_closed_url:
-            url = self._last_closed_url
-            self._last_closed_url = None  # 一度使ったらクリア
+        if self._closed_tab_stack:
+            url = self._closed_tab_stack.pop()
             self.add_new_tab(url, activate=True)
             print(f"[INFO] TabControl: Reopen - {url}")
         else:
