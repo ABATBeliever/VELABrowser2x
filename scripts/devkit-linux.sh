@@ -36,8 +36,10 @@ echo "Run VELA  :"
 echo "uv run python VELABrowser.py"
 echo
 echo "Build VELA:"
-echo "chmod +x ./scripts/build.sh"
-echo "./scripts/build.sh"
+echo "sudo apt/dnf/other install binutils patchelf gcc build-essential"
+echo
+echo "chmod +x ./scripts/build-linux-x64.sh"
+echo "./scripts/build-linux-x64.sh"
 echo
 
 exec bash

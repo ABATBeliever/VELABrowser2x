@@ -15,7 +15,9 @@ from PySide6.QtCore import QThread, Signal
 
 from constants import (
     HISTORY_DB, BOOKMARKS_DB, SESSION_FILE, DOWNLOADS_DB,
-    BROWSER_VERSION_SEMANTIC, BROWSER_FULL_NAME, UPDATE_CHECK_URL
+    BROWSER_VERSION_SEMANTIC, BROWSER_FULL_NAME, UPDATE_CHECK_URL,
+    set_db_vela_version, check_db_version,
+    stamp_version_to_json, check_version_stamp, VERSION_KEY
 )
 
 
@@ -45,6 +47,7 @@ class HistoryManager:
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_url ON history(url)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_visit_time ON history(visit_time DESC)')
+                set_db_vela_version(conn)
                 conn.commit()
             print("[INFO] History database initialized")
         except sqlite3.Error as e:
@@ -66,6 +69,7 @@ class HistoryManager:
                     ''', (title, result[1] + 1, result[0]))
                 else:
                     cursor.execute('INSERT INTO history (url, title) VALUES (?, ?)', (url, title))
+                set_db_vela_version(conn)
                 conn.commit()
         except sqlite3.Error as e:
             print(f"[ERROR] add_history failed: {e}")
@@ -136,6 +140,7 @@ class BookmarkManager:
                         created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
+                set_db_vela_version(conn)
                 conn.commit()
             print("[INFO] Bookmarks database initialized")
         except sqlite3.Error as e:
@@ -147,6 +152,7 @@ class BookmarkManager:
                 cursor = conn.cursor()
                 cursor.execute('INSERT INTO bookmarks (title, url, folder) VALUES (?, ?, ?)', 
                               (title, url, folder))
+                set_db_vela_version(conn)
                 conn.commit()
             print(f"[INFO] Bookmark added: {title}")
         except sqlite3.Error as e:
@@ -283,6 +289,7 @@ class DownloadManager:
                         finish_time TIMESTAMP
                     )
                 ''')
+                set_db_vela_version(conn)
                 conn.commit()
             print("[INFO] Downloads database initialized")
         except sqlite3.Error as e:
@@ -384,13 +391,16 @@ class DownloadManager:
             return []
     
     def clear_download_history(self):
-        """ダウンロード履歴をクリア"""
+        """ダウンロード履歴をクリア（進行中・要求中は除外）"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute('DELETE FROM downloads')
+                # state: 0=要求中, 1=進行中, 2=完了, 3=キャンセル, 4=中断
+                # 進行中(0,1)は残し、終了済み(2,3,4)のみ削除
+                cursor.execute('DELETE FROM downloads WHERE state NOT IN (0, 1)')
+                deleted = cursor.rowcount
                 conn.commit()
-            print("[INFO] Download history cleared")
+            print(f"[INFO] Download history cleared ({deleted} entries removed, in-progress preserved)")
         except sqlite3.Error as e:
             print(f"[ERROR] clear_download_history failed: {e}")
 
@@ -400,29 +410,92 @@ class DownloadManager:
 # =====================================================================
 
 class SessionManager:
-    """セッション管理クラス"""
+    """セッション管理クラス（バージョンスタンプ・旧形式自動変換対応）"""
+    
+    # 新形式の必須キー
+    _FORMAT_VERSION = 2  # 形式バージョン（旧=1はリスト形式）
     
     def __init__(self):
         self.session_file = SESSION_FILE
     
     def save_session(self, tabs_data):
+        """
+        セッションを保存する。
+        tabs_data は {"tabs": [...], "active_index": N} の辞書形式。
+        バージョンスタンプを付与して保存する。
+        """
         try:
+            # 常に新形式で保存
+            if isinstance(tabs_data, list):
+                # 念のため旧リスト形式が渡されたら変換
+                tabs_data = self._convert_list_to_new(tabs_data)
+            tabs_data["_format_version"] = self._FORMAT_VERSION
+            stamped = stamp_version_to_json(tabs_data)
             with open(self.session_file, 'w', encoding='utf-8') as f:
-                json.dump(tabs_data, f, ensure_ascii=False, indent=2)
-            print(f"[INFO] Session saved: {len(tabs_data)} tabs")
+                json.dump(stamped, f, ensure_ascii=False, indent=2)
+            print(f"[INFO] Session saved: {len(tabs_data.get('tabs', []))} tabs")
         except Exception as e:
             print(f"[ERROR] Failed to save session: {e}")
     
     def load_session(self):
+        """
+        セッションを読み込む。
+        戻り値:
+          ("ok",   dict)           正常読み込み（新形式）
+          ("newer_version", str)   現在より新しいVELAが書いたデータ（str=そのバージョン）
+          ("converted", dict)      旧形式を変換した（再起動を促すべき）
+          ("empty", None)          ファイルなし or 空
+        """
+        if not self.session_file.exists():
+            return ("empty", None)
+        
         try:
-            if self.session_file.exists():
-                with open(self.session_file, 'r', encoding='utf-8') as f:
-                    tabs_data = json.load(f)
-                print(f"[INFO] Session loaded: {len(tabs_data)} tabs")
-                return tabs_data
+            with open(self.session_file, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
         except Exception as e:
             print(f"[ERROR] Failed to load session: {e}")
-        return []
+            return ("empty", None)
+        
+        # --- バージョン新しすぎチェック ---
+        if not check_version_stamp(raw, "session.json"):
+            newer_ver = raw.get(VERSION_KEY, "不明")
+            return ("newer_version", newer_ver)
+        
+        # --- 旧形式（リスト）を検出して変換 ---
+        if isinstance(raw, list):
+            print("[INFO] Session: old list format detected, converting...")
+            converted = self._convert_list_to_new(raw)
+            converted["_format_version"] = self._FORMAT_VERSION
+            return ("converted", converted)
+        
+        fmt_ver = raw.get("_format_version", 1)
+        if fmt_ver < self._FORMAT_VERSION and "tabs" not in raw:
+            # tabs キーがない旧辞書形式
+            print("[INFO] Session: old dict format detected, converting...")
+            converted = self._convert_list_to_new([raw])
+            converted["_format_version"] = self._FORMAT_VERSION
+            return ("converted", converted)
+        
+        tabs_count = len(raw.get("tabs", []))
+        print(f"[INFO] Session loaded: {tabs_count} tabs")
+        return ("ok", raw)
+    
+    @staticmethod
+    def _convert_list_to_new(old_list: list) -> dict:
+        """旧リスト形式 → 新辞書形式に変換"""
+        active_index = 0
+        tabs = []
+        for i, item in enumerate(old_list):
+            if not isinstance(item, dict):
+                continue
+            # 旧形式では active_index がタブ内に埋め込まれていた
+            if item.get("active_index") is not None:
+                active_index = item["active_index"]
+            tabs.append({
+                "url": item.get("url", "https://www.google.com"),
+                "title": item.get("title", "")
+            })
+        return {"tabs": tabs, "active_index": active_index}
 
 
 # =====================================================================

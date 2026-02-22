@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=VELA Browser Praxis
+Exec=VELABrowser
+Icon=vela
+Type=Application
+Categories=Network;WebBrowser;
+X-AppImage-Version=2.0.4.0

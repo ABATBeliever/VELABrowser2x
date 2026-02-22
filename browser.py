@@ -7,18 +7,19 @@ import re
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from PySide6.QtCore import Qt, QUrl, QSettings, QTimer
+from PySide6.QtCore import Qt, QUrl, QSettings, QTimer, QStringListModel
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLineEdit, QListWidget, QSplitter, QToolBar, QMessageBox,
-    QFileDialog, QApplication, QMenu, QLabel, QProgressBar
+    QFileDialog, QApplication, QMenu, QLabel, QProgressBar, QCompleter
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
 from PySide6.QtGui import QFont, QAction, QShortcut, QKeySequence
 import qtawesome as qta
 
-from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR, USER_AGENT_PRESETS
+from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR, USER_AGENT_PRESETS, \
+    PROFILE_PATH, INCOGNITO_CACHE_PATH, INCOGNITO_STATE_PATH, CACHE_DIR
 from managers import HistoryManager, BookmarkManager, DownloadManager, SessionManager, UpdateChecker
 from dialogs import AddBookmarkDialog, MainDialog, FindDialog, SavePageDialog
 
@@ -26,6 +27,26 @@ from dialogs import AddBookmarkDialog, MainDialog, FindDialog, SavePageDialog
 from PySide6.QtCore import QUrl, Signal
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWidgets import QListWidgetItem
+
+
+# =====================================================================
+# URLバー（フォーカス離脱時にドメインが見えるよう先頭にスクロール）
+# =====================================================================
+
+class UrlLineEdit(QLineEdit):
+    """フォーカスを外したときに先頭（ドメイン部分）が表示されるURLバー"""
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        # カーソルを先頭に移動してドメインを見えるようにする
+        self.home(False)  # False = 選択解除
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        # フォーカス取得直後に selectAll() すると Linux では
+        # QCompleter 等の内部処理と競合して「2文字目で全選択」が
+        # 再トリガーされる不具合が出るため、次のイベントループで実行する
+        QTimer.singleShot(0, self.selectAll)
 
 
 # =====================================================================
@@ -162,22 +183,18 @@ class VerticalTabBrowser(QMainWindow):
         self._temp_pages = []
         self._closed_tab_stack = []  # 閉じたタブのURLスタック（複数対応）
         self._opening_pdf_urls = set()  # PDFループ防止: 処理中URLのセット
+        self._zoom_levels = {}  # タブごとのズーム倍率 {web_view: float}
         
         # 永続化プロファイルを作成（Cookie、LocalStorageなどが保存される）
-        from constants import DATA_DIR
-        profile_path = str(DATA_DIR / "profile")
         self.profile = QWebEngineProfile("VELAProfile")
-        self.profile.setPersistentStoragePath(profile_path)
-        self.profile.setCachePath(str(DATA_DIR / "cache"))
+        self.profile.setPersistentStoragePath(str(PROFILE_PATH))
+        self.profile.setCachePath(str(CACHE_DIR / "profile"))
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
         
         # シークレット用プロファイル（非永続）
-        # 引数なしの QWebEngineProfile() はWindows上でキャッシュパス競合エラーが出るため
-        # 専用の一時パスを指定した名前付きプロファイルを使い、Cookieのみ非永続にする
         self.incognito_profile = QWebEngineProfile("VELAIncognito")
-        incognito_cache = str(DATA_DIR / "incognito_cache")
-        self.incognito_profile.setCachePath(incognito_cache)
-        self.incognito_profile.setPersistentStoragePath(str(DATA_DIR / "incognito_storage"))
+        self.incognito_profile.setCachePath(str(INCOGNITO_CACHE_PATH))
+        self.incognito_profile.setPersistentStoragePath(str(INCOGNITO_STATE_PATH))
         self.incognito_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
         
         self.history_manager = HistoryManager()
@@ -230,14 +247,18 @@ class VerticalTabBrowser(QMainWindow):
                 print(f"[INFO] UserAgent set to preset {ua_preset}")
         
         # downloadRequested の重複接続を防ぐために一度切断してから接続
-        try:
-            self.profile.downloadRequested.disconnect(self.on_download_requested)
-        except RuntimeError:
-            pass
-        try:
-            self.incognito_profile.downloadRequested.disconnect(self.on_download_requested)
-        except RuntimeError:
-            pass
+        # 初回起動時は未接続のため RuntimeWarning が出るが無害なので抑制する
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            try:
+                self.profile.downloadRequested.disconnect(self.on_download_requested)
+            except RuntimeError:
+                pass
+            try:
+                self.incognito_profile.downloadRequested.disconnect(self.on_download_requested)
+            except RuntimeError:
+                pass
         self.profile.downloadRequested.connect(self.on_download_requested)
         self.incognito_profile.downloadRequested.connect(self.on_download_requested)
         print("[INFO] Settings applied")
@@ -327,25 +348,22 @@ class VerticalTabBrowser(QMainWindow):
         startup_action = self.settings.value("startup_action", 0, type=int)
         
         if startup_action == 0 and self.settings.value("save_session", True, type=bool):
-            session_data = self.session_manager.load_session()
-            if session_data:
-                # 新形式: {"tabs": [...], "active_index": N}
-                # 旧形式: [{url, title, active_index}, ...] にも対応
-                if isinstance(session_data, dict):
+            status, session_data = self.session_manager.load_session()
+            
+            if status == "newer_version":
+                # より新しいVELAが書いたセッションは無視して空スタートを促す
+                # （警告は VELABrowser.py の起動前チェックで表示済み）
+                pass
+            elif status in ("ok", "converted"):
+                if session_data:
                     tabs_data = session_data.get("tabs", [])
                     active_index = session_data.get("active_index", 0)
-                elif isinstance(session_data, list):
-                    tabs_data = session_data
-                    active_index = tabs_data[0].get("active_index", 0) if tabs_data else 0
-                else:
-                    tabs_data = []
-                    active_index = 0
-                
-                if tabs_data:
-                    for i, tab_data in enumerate(tabs_data):
-                        activate = (i == active_index)
-                        self.add_new_tab(tab_data.get("url", "https://www.google.com"), activate=activate)
-                    return
+                    
+                    if tabs_data:
+                        for i, tab_data in enumerate(tabs_data):
+                            activate = (i == active_index)
+                            self.add_new_tab(tab_data.get("url", "https://www.google.com"), activate=activate)
+                        return
         
         if startup_action == 1:
             homepage = self.settings.value("homepage", "https://www.google.com")
@@ -396,8 +414,26 @@ class VerticalTabBrowser(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+Tab"), self).activated.connect(self.switch_to_prev_tab)
         # Ctrl+F: ページ内検索
         QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(self.find_in_page)
+        # ズームイン: Ctrl++ (= Ctrl+Shift+=) / Ctrl+= / Ctrl+; (JISキーボードの+無シフト)
+        QShortcut(QKeySequence("Ctrl++"), self).activated.connect(self.zoom_in)
+        QShortcut(QKeySequence("Ctrl+="), self).activated.connect(self.zoom_in)
+        QShortcut(QKeySequence("Ctrl+Shift+="), self).activated.connect(self.zoom_in)
+        QShortcut(QKeySequence("Ctrl+;"), self).activated.connect(self.zoom_in)
+        # ズームアウト: Ctrl+-
+        QShortcut(QKeySequence("Ctrl+-"), self).activated.connect(self.zoom_out)
+        # ズームリセット: Ctrl+0
+        QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self.zoom_reset)
         print("[INFO] Shortcuts registered")
     
+    def _on_tabs_reordered(self, parent, start, end, dest, dest_row):
+        """タブのドラッグ&ドロップ並び替え後にカスタムウィジェットを再アタッチ"""
+        for i in range(self.tab_list.count()):
+            item = self.tab_list.item(i)
+            if isinstance(item, TabItem):
+                # ドラッグ後にカスタムウィジェットの参照が外れるため再セット
+                self.tab_list.setItemWidget(item, item.widget)
+        print("[INFO] TabControl: Reordered")
+
     def switch_to_next_tab(self):
         """次のタブ（下方向）に切り替え"""
         count = self.tab_list.count()
@@ -415,6 +451,73 @@ class VerticalTabBrowser(QMainWindow):
         current = self.tab_list.currentRow()
         prev_row = (current - 1) % count
         self.tab_list.setCurrentRow(prev_row)
+    
+    # ---- ズーム操作 ----
+    _ZOOM_STEPS = [0.25, 0.33, 0.50, 0.67, 0.75, 0.80, 0.90,
+                   1.00, 1.10, 1.25, 1.50, 1.75, 2.00, 2.50, 3.00]
+
+    def _current_web_view(self):
+        """現在アクティブな WebView を返す。なければ None"""
+        item = self.tab_list.currentItem()
+        if item and isinstance(item, TabItem):
+            return item.web_view
+        return None
+
+    def zoom_in(self):
+        """ズームイン（Ctrl++）"""
+        wv = self._current_web_view()
+        if not wv:
+            return
+        current = self._zoom_levels.get(wv, 1.0)
+        larger = [z for z in self._ZOOM_STEPS if z > current + 0.001]
+        new_zoom = larger[0] if larger else self._ZOOM_STEPS[-1]
+        self._apply_zoom(wv, new_zoom)
+
+    def zoom_out(self):
+        """ズームアウト（Ctrl+-）"""
+        wv = self._current_web_view()
+        if not wv:
+            return
+        current = self._zoom_levels.get(wv, 1.0)
+        smaller = [z for z in self._ZOOM_STEPS if z < current - 0.001]
+        new_zoom = smaller[-1] if smaller else self._ZOOM_STEPS[0]
+        self._apply_zoom(wv, new_zoom)
+
+    def zoom_reset(self):
+        """ズームリセット（Ctrl+0）"""
+        wv = self._current_web_view()
+        if not wv:
+            return
+        self._apply_zoom(wv, 1.0)
+
+    def _apply_zoom(self, web_view, factor):
+        """指定 WebView にズーム倍率を適用してURLバー末尾に表示"""
+        web_view.setZoomFactor(factor)
+        self._zoom_levels[web_view] = factor
+        pct = int(factor * 100)
+        print(f"[INFO] Zoom: {pct}%")
+        # URLバーの右端に一時的にズーム率を表示（2秒後に元に戻す）
+        if not hasattr(self, '_zoom_label'):
+            self._zoom_label = QLabel(self.url_bar)
+            self._zoom_label.setStyleSheet(
+                "QLabel { color: #666; font-size: 9pt; background: transparent; "
+                "padding-right: 6px; }"
+            )
+            self._zoom_label.setAttribute(Qt.WA_TranslucentBackground)
+        self._zoom_label.setText(f"{pct}%")
+        self._zoom_label.adjustSize()
+        # URLバー内の右端に配置
+        self._zoom_label.move(
+            self.url_bar.width() - self._zoom_label.width() - 4,
+            (self.url_bar.height() - self._zoom_label.height()) // 2
+        )
+        self._zoom_label.show()
+        if hasattr(self, '_zoom_label_timer'):
+            self._zoom_label_timer.stop()
+        self._zoom_label_timer = QTimer(self)
+        self._zoom_label_timer.setSingleShot(True)
+        self._zoom_label_timer.timeout.connect(self._zoom_label.hide)
+        self._zoom_label_timer.start(2000)
     
     def check_for_updates(self):
         """更新チェック"""
@@ -603,11 +706,15 @@ class VerticalTabBrowser(QMainWindow):
         dialog.exec()
     
     def show_download_dialog(self):
-        """ダウンロードマネージャー表示"""
-        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
-        dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
-        dialog.show_download_tab()
-        dialog.exec()
+        """ダウンロードマネージャー表示（シングルインスタンスで使い回し）"""
+        if not hasattr(self, '_download_dialog') or self._download_dialog is None:
+            self._download_dialog = MainDialog(
+                self.history_manager, self.bookmark_manager, self.download_manager, self)
+            self._download_dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
+            self._download_dialog.finished.connect(lambda: setattr(self, '_download_dialog', None))
+        self._download_dialog.show_download_tab()
+        self._download_dialog.raise_()
+        self._download_dialog.show()
     
     def save_page(self):
         """ページを保存（PNG / PDF）"""
@@ -672,6 +779,10 @@ class VerticalTabBrowser(QMainWindow):
         self.tab_list.currentItemChanged.connect(self.on_tab_changed)
         self.tab_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tab_list.customContextMenuRequested.connect(self.show_tab_context_menu)
+        # ドラッグ&ドロップによるタブ並び替えを有効化
+        self.tab_list.setDragDropMode(QListWidget.InternalMove)
+        self.tab_list.setDefaultDropAction(Qt.MoveAction)
+        self.tab_list.model().rowsMoved.connect(self._on_tabs_reordered)
         layout.addWidget(self.tab_list)
         
         return widget
@@ -709,9 +820,17 @@ class VerticalTabBrowser(QMainWindow):
         self.reload_btn.clicked.connect(self.reload_page)
         toolbar.addWidget(self.reload_btn)
         
-        self.url_bar = QLineEdit()
+        self.url_bar = UrlLineEdit()
         self.url_bar.setPlaceholderText("URLを入力またはキーワードで検索")
         self.url_bar.returnPressed.connect(self.navigate_to_url)
+        # オートコンプリート
+        self._completer_model = QStringListModel()
+        self._url_completer = QCompleter(self._completer_model, self)
+        self._url_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._url_completer.setFilterMode(Qt.MatchContains)
+        self._url_completer.setMaxVisibleItems(10)
+        self.url_bar.setCompleter(self._url_completer)
+        self.url_bar.textEdited.connect(self._update_url_completer)
         toolbar.addWidget(self.url_bar)
         
         bookmark_add_btn = QPushButton()
@@ -729,12 +848,18 @@ class VerticalTabBrowser(QMainWindow):
         toolbar.addWidget(menu_btn)
         
         # ロード進捗バー（URLバー下部・3pxの細いバー）
+        # setVisible(False) するとレイアウトが詰まって揺れるため、
+        # 常に領域を確保しつつ完了時は透明にする
         self.load_progress_bar = QProgressBar()
         self.load_progress_bar.setStyleSheet(STYLES['load_progress_bar'])
         self.load_progress_bar.setRange(0, 100)
         self.load_progress_bar.setValue(0)
-        self.load_progress_bar.setVisible(False)
         self.load_progress_bar.setTextVisible(False)
+        self.load_progress_bar.setFixedHeight(3)
+        # 初期状態は透明（非ロード中）
+        self.load_progress_bar.setStyleSheet(
+            STYLES['load_progress_bar'] + "QProgressBar::chunk { background-color: transparent; }"
+        )
         layout.addWidget(self.load_progress_bar)
         
         # 疑似ロード進捗用タイマー
@@ -829,7 +954,7 @@ class VerticalTabBrowser(QMainWindow):
         if activate:
             self.tab_list.setCurrentItem(tab_item)
         
-        mode = "シークレット" if incognito else "通常"
+        mode = "Seacret" if incognito else "Normal"
         print(f"[INFO] TabControl: Add ({mode})")
     
     def handle_fullscreen_request(self, request):
@@ -862,18 +987,28 @@ class VerticalTabBrowser(QMainWindow):
         if current_item and isinstance(current_item, TabItem) and current_item.web_view == web_view:
             if progress > 0 and progress < 100:
                 self._progress_timer.stop()
-                self.load_progress_bar.setVisible(True)
-                # WebEngineの進捗が取れる場合はそちらを優先、最大85%まで（完了はloadFinishedで消す）
+                self._show_progress_bar()
                 display = min(progress, 85)
                 self.load_progress_bar.setValue(display)
             elif progress == 100:
                 self.load_progress_bar.setValue(100)
     
+    def _show_progress_bar(self):
+        """進捗バーを表示状態に（色を戻す）"""
+        self.load_progress_bar.setStyleSheet(STYLES['load_progress_bar'])
+
+    def _hide_progress_bar(self):
+        """進捗バーを非表示状態に（透明化・領域は保持）"""
+        self.load_progress_bar.setStyleSheet(
+            STYLES['load_progress_bar'] + "QProgressBar::chunk { background-color: transparent; }"
+        )
+        self.load_progress_bar.setValue(0)
+
     def _start_progress_bar(self):
         """ロード開始時に進捗バーをアニメーション開始（疑似進捗）"""
         self._pseudo_progress = 0
         self.load_progress_bar.setValue(0)
-        self.load_progress_bar.setVisible(True)
+        self._show_progress_bar()
         self._progress_timer.start()
     
     def _advance_pseudo_progress(self):
@@ -890,11 +1025,10 @@ class VerticalTabBrowser(QMainWindow):
         self.load_progress_bar.setValue(self._pseudo_progress)
     
     def _stop_progress_bar(self):
-        """ロード完了時に進捗バーを終了"""
+        """ロード完了時に進捗バーを終了（透明化）"""
         self._progress_timer.stop()
         self.load_progress_bar.setValue(100)
-        # 少し待ってから非表示
-        QTimer.singleShot(300, lambda: self.load_progress_bar.setVisible(False))
+        QTimer.singleShot(300, self._hide_progress_bar)
     
     def on_tab_changed(self, current, previous):
         """タブ切り替え"""
@@ -913,6 +1047,10 @@ class VerticalTabBrowser(QMainWindow):
         web_view.show()
         
         self.url_bar.setText(web_view.url().toString())
+        if not self.url_bar.hasFocus():
+            self.url_bar.home(False)
+        zoom = self._zoom_levels.get(web_view, 1.0)
+        web_view.setZoomFactor(zoom)
         
         # ロード進捗バーをリセット
         self._stop_progress_bar()
@@ -939,6 +1077,9 @@ class VerticalTabBrowser(QMainWindow):
         if current_item and isinstance(current_item, TabItem):
             if current_item.web_view == web_view:
                 self.url_bar.setText(url.toString())
+                # フォーカスがURLバーにない場合は先頭を表示
+                if not self.url_bar.hasFocus():
+                    self.url_bar.home(False)
     
     def update_window_title(self, page_title):
         """ウィンドウタイトルを更新"""
@@ -947,6 +1088,24 @@ class VerticalTabBrowser(QMainWindow):
         else:
             self.setWindowTitle(BROWSER_FULL_NAME)
     
+    def _update_url_completer(self, text):
+        """URLバー入力中に履歴を検索してオートコンプリート候補を更新"""
+        if len(text) < 1:
+            self._completer_model.setStringList([])
+            return
+        results = self.history_manager.search_history(text, limit=10)
+        # URL と タイトル 両方を候補に（重複排除）
+        seen = set()
+        candidates = []
+        for url, title, _, _ in results:
+            if url not in seen:
+                seen.add(url)
+                candidates.append(url)
+            if title and title not in seen:
+                seen.add(title)
+                candidates.append(title)
+        self._completer_model.setStringList(candidates)
+
     def navigate_to_url(self):
         """URL移動"""
         current_item = self.tab_list.currentItem()
@@ -1040,6 +1199,8 @@ class VerticalTabBrowser(QMainWindow):
                         if len(self._closed_tab_stack) > 20:
                             self._closed_tab_stack.pop(0)
                 self.tab_list.takeItem(i)
+                # ズーム情報もクリーンアップ
+                self._zoom_levels.pop(item.web_view, None)
                 item.web_view.deleteLater()
                 if item.web_view in self.tabs:
                     self.tabs.remove(item.web_view)

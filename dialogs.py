@@ -6,7 +6,7 @@ VELA Browser - ダイアログ類
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QLabel, QComboBox, QFrame, QMessageBox, QTabWidget,
@@ -643,134 +643,160 @@ class MainDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(10, 10, 10, 10)
-        
-        # 説明ラベル
+
         info_label = QLabel("現在のダウンロードと過去のダウンロード履歴を表示します。")
         layout.addWidget(info_label)
-        
-        # ダウンロードテーブル
+
+        # テーブル（5列：ファイル名・URL・保存先・サイズ・進捗）
         self.download_table = QTableWidget()
-        self.download_table.setColumnCount(6)
+        self.download_table.setColumnCount(5)
         self.download_table.setHorizontalHeaderLabels([
-            "ファイル名", "URL", "保存先", "サイズ", "進捗", "状態"
+            "ファイル名", "URL", "保存先", "サイズ", "進捗"
         ])
-        self.download_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.download_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.download_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.download_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        hh = self.download_table.horizontalHeader()
+        # 全列をInteractiveにして手動リサイズ可能に
+        for i in range(5):
+            hh.setSectionResizeMode(i, QHeaderView.Interactive)
+        self.download_table.setColumnWidth(0, 90)  # ファイル名
+        self.download_table.setColumnWidth(1, 160)  # URL
+        self.download_table.setColumnWidth(2, 220)  # 保存先
+        self.download_table.setColumnWidth(3, 40)   # サイズ
+        self.download_table.setColumnWidth(4, 40)   # 進捗
+        self.download_table.setSelectionBehavior(QAbstractItemView.SelectItems)  # セル単位選択
+        self.download_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.download_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # 右クリックメニュー
+        self.download_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.download_table.customContextMenuRequested.connect(self._download_context_menu)
         layout.addWidget(self.download_table)
-        
-        # ボタン群
+
         button_layout = QHBoxLayout()
-        
         refresh_btn = QPushButton("更新")
         refresh_btn.setStyleSheet(STYLES['button_secondary'])
         refresh_btn.clicked.connect(self.load_downloads)
         button_layout.addWidget(refresh_btn)
-        
         clear_history_btn = QPushButton("履歴をクリア")
         clear_history_btn.setStyleSheet(STYLES['button_secondary'])
         clear_history_btn.clicked.connect(self.clear_download_history)
         button_layout.addWidget(clear_history_btn)
-        
         button_layout.addStretch()
         layout.addLayout(button_layout)
-        
-        # 初期データ読み込み
+
+        # 自動更新タイマー（0.5秒ごと）
+        self._download_refresh_timer = QTimer(self)
+        self._download_refresh_timer.setInterval(500)
+        self._download_refresh_timer.timeout.connect(self.load_downloads)
+        self._download_refresh_timer.start()
+
         self.load_downloads()
-        
         return widget
-    
+
+    def _download_context_menu(self, pos):
+        """ダウンロードテーブルの右クリックメニュー（コピー）"""
+        row = self.download_table.rowAt(pos.y())
+        if row < 0:
+            return
+
+        file_item = self.download_table.item(row, 0)
+        url_item  = self.download_table.item(row, 1)
+        path_item = self.download_table.item(row, 2)
+        if not file_item:
+            return
+
+        import os
+        filename  = file_item.text() if file_item else ""
+        url_text  = url_item.text()  if url_item  else ""
+        dir_text  = path_item.text() if path_item else ""
+        full_path = os.path.join(dir_text, filename) if dir_text else filename
+
+        from PySide6.QtWidgets import QMenu as _QMenu
+        menu = _QMenu(self)
+        menu.setStyleSheet(STYLES.get('menu', ''))
+
+        copy_name_action = menu.addAction(f"ファイル名をコピー")
+        copy_url_action  = menu.addAction(f"URLをコピー")
+        copy_path_action = menu.addAction(f"絶対パスをコピー")
+
+        # URLが空の場合はグレーアウト
+        if not url_text:
+            copy_url_action.setEnabled(False)
+
+        action = menu.exec(self.download_table.viewport().mapToGlobal(pos))
+
+        from PySide6.QtWidgets import QApplication as _QApp
+        if action == copy_name_action:
+            _QApp.clipboard().setText(filename)
+        elif action == copy_url_action:
+            _QApp.clipboard().setText(url_text)
+        elif action == copy_path_action:
+            _QApp.clipboard().setText(full_path)
+
     def load_downloads(self):
-        """ダウンロードデータを読み込み"""
-        # 現在進行中のダウンロード
-        current_downloads = self.download_manager.get_downloads()
-        
-        # 過去のダウンロード履歴
+        """ダウンロードデータを読み込み（DBから一本化・進捗はメモリ側で補完）"""
+        from PySide6.QtWebEngineCore import QWebEngineDownloadRequest
+
+        # メモリ上の進行中ダウンロードをURLでインデックス化
+        live_by_url = {}
+        for dl in self.download_manager.get_downloads():
+            live_by_url[dl.url().toString()] = dl
+
         download_history = self.download_manager.get_download_history(100)
-        
-        # テーブルをクリア
+
+        # スクロール位置を保持
+        scrollbar = self.download_table.verticalScrollBar()
+        scroll_pos = scrollbar.value()
+
         self.download_table.setRowCount(0)
-        
-        # 現在のダウンロードを表示
-        for download in current_downloads:
-            row = self.download_table.rowCount()
-            self.download_table.insertRow(row)
-            
-            self.download_table.setItem(row, 0, QTableWidgetItem(download.downloadFileName()))
-            self.download_table.setItem(row, 1, QTableWidgetItem(download.url().toString()))
-            self.download_table.setItem(row, 2, QTableWidgetItem(download.downloadDirectory()))
-            
-            total_bytes = download.totalBytes()
-            if total_bytes > 0:
-                size_mb = total_bytes / (1024 * 1024)
-                self.download_table.setItem(row, 3, QTableWidgetItem(f"{size_mb:.2f} MB"))
-            else:
-                self.download_table.setItem(row, 3, QTableWidgetItem("不明"))
-            
-            # 進捗バー
-            progress = QProgressBar()
-            if total_bytes > 0:
-                progress.setValue(int(download.receivedBytes() / total_bytes * 100))
-            else:
-                progress.setValue(0)
-            self.download_table.setCellWidget(row, 4, progress)
-            
-            # 状態
-            state_map = {
-                QWebEngineDownloadRequest.DownloadRequested: "要求中",
-                QWebEngineDownloadRequest.DownloadInProgress: "ダウンロード中",
-                QWebEngineDownloadRequest.DownloadCompleted: "完了",
-                QWebEngineDownloadRequest.DownloadCancelled: "キャンセル",
-                QWebEngineDownloadRequest.DownloadInterrupted: "中断"
-            }
-            state = state_map.get(download.state(), "不明")
-            self.download_table.setItem(row, 5, QTableWidgetItem(state))
-        
-        # 過去のダウンロード履歴を表示
+
         for filename, url, download_path, total_bytes, received_bytes, state, start_time, finish_time in download_history:
             row = self.download_table.rowCount()
             self.download_table.insertRow(row)
-            
+
             self.download_table.setItem(row, 0, QTableWidgetItem(filename))
-            self.download_table.setItem(row, 1, QTableWidgetItem(url))
+            self.download_table.setItem(row, 1, QTableWidgetItem(url or ""))
             self.download_table.setItem(row, 2, QTableWidgetItem(download_path or ""))
-            
-            if total_bytes > 0:
-                size_mb = total_bytes / (1024 * 1024)
-                self.download_table.setItem(row, 3, QTableWidgetItem(f"{size_mb:.2f} MB"))
+
+            # サイズ
+            if total_bytes and total_bytes > 0:
+                self.download_table.setItem(
+                    row, 3, QTableWidgetItem(f"{total_bytes / (1024*1024):.2f} MB"))
             else:
                 self.download_table.setItem(row, 3, QTableWidgetItem("不明"))
-            
-            # 進捗
-            if total_bytes > 0:
-                progress_pct = int(received_bytes / total_bytes * 100)
-                self.download_table.setItem(row, 4, QTableWidgetItem(f"{progress_pct}%"))
+
+            # 進捗（列4）
+            live = live_by_url.get(url)
+            if live and live.state().value == 1:  # DownloadInProgress
+                live_total = live.totalBytes()
+                live_recv  = live.receivedBytes()
+                pct = int(live_recv / live_total * 100) if live_total > 0 else 0
+                progress_bar = QProgressBar()
+                progress_bar.setValue(pct)
+                self.download_table.setCellWidget(row, 4, progress_bar)
             else:
-                self.download_table.setItem(row, 4, QTableWidgetItem("0%"))
-            
-            # 状態（DBから）
-            state_map = {
-                0: "要求中",
-                1: "ダウンロード中",
-                2: "完了",
-                3: "キャンセル",
-                4: "中断"
-            }
-            state_text = state_map.get(state, "不明")
-            self.download_table.setItem(row, 5, QTableWidgetItem(state_text))
+                # DB値で表示。100% or 完了(state==2) なら「完了」テキスト
+                if total_bytes and total_bytes > 0:
+                    pct = int((received_bytes or 0) / total_bytes * 100)
+                else:
+                    pct = 100 if state == 2 else 0
+
+                if pct >= 100 or state == 2:
+                    item = QTableWidgetItem("完了")
+                    item.setForeground(__import__('PySide6.QtGui', fromlist=['QColor']).QColor('#2e7d32'))
+                    self.download_table.setItem(row, 4, item)
+                else:
+                    self.download_table.setItem(row, 4, QTableWidgetItem(f"{pct}%"))
+
+        scrollbar.setValue(scroll_pos)
     
     def clear_download_history(self):
         """ダウンロード履歴をクリア"""
         reply = QMessageBox.question(
-            self, "確認", "ダウンロード履歴を全て削除しますか？\n（現在進行中のダウンロードは保持されます）",
+            self, "確認", "完了・キャンセル・中断済みのダウンロード履歴を削除しますか？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:
             self.download_manager.clear_download_history()
             self.load_downloads()
-            QMessageBox.information(self, "完了", "ダウンロード履歴をクリアしました。")
     
     def show_download_tab(self):
         """ダウンロードタブを表示"""

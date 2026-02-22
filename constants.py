@@ -11,8 +11,8 @@ from pathlib import Path
 # =====================================================================
 BROWSER_NAME = "VELA"
 BROWSER_CODENAME = "Praxis"
-BROWSER_VERSION_SEMANTIC = "2.0.3.0"
-BROWSER_VERSION_NAME = "2.0.3.0 Stable"
+BROWSER_VERSION_SEMANTIC = "2.1.0.0"
+BROWSER_VERSION_NAME = "2.1.0.0 Stable"
 BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
 
 def detect_browser_target_architecture():
@@ -65,17 +65,146 @@ USER_AGENT_PRESET_NAMES = [
 ]
 
 # =====================================================================
-# データディレクトリ設定
+# データディレクトリ設定（XDG準拠）
 # =====================================================================
-DATA_DIR = Path.home() / ".VELA_Browser"
-DATA_DIR.mkdir(exist_ok=True)
 
-HISTORY_DB = DATA_DIR / "history.db"
-SESSION_FILE = DATA_DIR / "session.json"
-BOOKMARKS_DB = DATA_DIR / "bookmarks.db"
-DOWNLOADS_DB = DATA_DIR / "downloads.db"
+def _get_xdg_dirs():
+    """
+    OS に応じた XDG ベースディレクトリを返す。
+      Linux  : XDG 標準 (~/.config, ~/.local/share, ~/.cache, ~/.local/state)
+      Windows: 独自マッピング (~/.config, ~/.local/share, ~/.local/cache, ~/.local/state)
+      その他 : 旧来の ~/.VELA_Browser に統合（変更なし）
+    戻り値: (config_home, data_home, cache_home, state_home)
+    """
+    system = platform.system().lower()
+    home = Path.home()
+
+    if system == "linux":
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+        data_home   = Path(os.environ.get("XDG_DATA_HOME",   home / ".local" / "share"))
+        cache_home  = Path(os.environ.get("XDG_CACHE_HOME",  home / ".cache"))
+        state_home  = Path(os.environ.get("XDG_STATE_HOME",  home / ".local" / "state"))
+    elif system == "windows":
+        config_home = home / ".config"
+        data_home   = home / ".local" / "share"
+        cache_home  = home / ".local" / "cache"
+        state_home  = home / ".local" / "state"
+    else:
+        # macOS その他は旧来ディレクトリに統合して変更なし
+        legacy = home / ".VELA_Browser"
+        return legacy, legacy, legacy, legacy
+
+    return config_home, data_home, cache_home, state_home
+
+import os as _os_module  # os は後で使う。先に取り込んでおく
+import os
+
+_config_home, _data_home, _cache_home, _state_home = _get_xdg_dirs()
+
+# VELA 専用サブディレクトリ
+_VELA_APP_NAME = "VELABrowser"
+
+# 設定・DB は config/data/state に分離
+CONFIG_DIR  = _config_home / _VELA_APP_NAME   # 設定（将来的に ini など）
+DATA_DIR    = _data_home   / _VELA_APP_NAME   # DB・ブックマーク・セッション
+CACHE_DIR   = _cache_home  / _VELA_APP_NAME   # WebEngine キャッシュ
+STATE_DIR   = _state_home  / _VELA_APP_NAME   # WebEngine 永続ストレージ
+
+for _d in (CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
+
+# 旧来パス（移行元の検出に使用）
+LEGACY_DATA_DIR = Path.home() / ".VELA_Browser"
+
+HISTORY_DB    = DATA_DIR / "history.db"
+SESSION_FILE  = DATA_DIR / "session.json"
+BOOKMARKS_DB  = DATA_DIR / "bookmarks.db"
+DOWNLOADS_DB  = DATA_DIR / "downloads.db"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
-DOWNLOADS_DIR.mkdir(exist_ok=True)
+DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+# WebEngine プロファイルパス
+PROFILE_PATH         = STATE_DIR / "profile"
+INCOGNITO_CACHE_PATH = CACHE_DIR / "incognito"
+INCOGNITO_STATE_PATH = STATE_DIR / "incognito_storage"
+
+# =====================================================================
+# バージョンスタンプ（DB / JSON への埋め込みと検証）
+# =====================================================================
+
+VERSION_KEY = "_vela_version"
+
+def stamp_version_to_json(data: dict) -> dict:
+    """JSON データにバージョンスタンプを付与して返す"""
+    data[VERSION_KEY] = BROWSER_VERSION_SEMANTIC
+    return data
+
+def check_version_stamp(data: dict, source_label: str = "") -> bool:
+    """
+    data に埋め込まれたバージョンが現在のバージョンより *新しい* 場合 False を返す。
+    バージョンが記録されていない・同じ・古い場合は True を返す。
+    呼び出し元は False の場合に警告を表示すること。
+    """
+    from packaging import version as _ver
+    stamped = data.get(VERSION_KEY, "")
+    if not stamped:
+        return True  # スタンプなし＝旧データ、問題なし
+    try:
+        if _ver.parse(stamped) > _ver.parse(BROWSER_VERSION_SEMANTIC):
+            print(f"[WARN] {source_label}: データは新しいVELA ({stamped}) で書かれています")
+            return False
+    except Exception:
+        pass
+    return True
+
+def get_db_vela_version(db_path) -> str:
+    """
+    SQLite DB の meta テーブルから VELA バージョンを取得する。
+    テーブルが存在しない・取得失敗の場合は空文字を返す。
+    """
+    import sqlite3
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM meta WHERE key = ?", (VERSION_KEY,))
+            row = cur.fetchone()
+            return row[0] if row else ""
+    except Exception:
+        return ""
+
+def set_db_vela_version(conn):
+    """
+    SQLite 接続に対して meta テーブルを作成し、バージョンを書き込む。
+    既存接続に対して呼ぶこと（commit は呼び出し元が行う）。
+    """
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    cur.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        (VERSION_KEY, BROWSER_VERSION_SEMANTIC)
+    )
+
+def check_db_version(db_path, label: str = "") -> bool:
+    """
+    DB に記録されているバージョンと現在のバージョンを比較する。
+    現在より新しければ False、問題なければ True。
+    """
+    from packaging import version as _ver
+    stamped = get_db_vela_version(db_path)
+    if not stamped:
+        return True
+    try:
+        if _ver.parse(stamped) > _ver.parse(BROWSER_VERSION_SEMANTIC):
+            print(f"[WARN] {label}: DB は新しいVELA ({stamped}) で書かれています")
+            return False
+    except Exception:
+        pass
+    return True
 
 # =====================================================================
 # スタイルシート定義
