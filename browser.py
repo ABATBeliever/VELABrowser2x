@@ -19,7 +19,7 @@ from PySide6.QtGui import QFont, QAction, QShortcut, QKeySequence
 import qtawesome as qta
 
 from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR, USER_AGENT_PRESETS, \
-    PROFILE_PATH, INCOGNITO_CACHE_PATH, INCOGNITO_STATE_PATH, CACHE_DIR
+    PROFILE_PATH, INCOGNITO_CACHE_PATH, INCOGNITO_STATE_PATH, CACHE_DIR, CHECK_FOR_UPDATES
 from managers import HistoryManager, BookmarkManager, DownloadManager, SessionManager, UpdateChecker
 from dialogs import AddBookmarkDialog, MainDialog, FindDialog, SavePageDialog
 
@@ -36,17 +36,34 @@ from PySide6.QtWidgets import QListWidgetItem
 class UrlLineEdit(QLineEdit):
     """フォーカスを外したときに先頭（ドメイン部分）が表示されるURLバー"""
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 本当のフォーカスイン（ユーザー操作）かどうかを追跡するフラグ
+        self._user_focused = False
+
     def focusOutEvent(self, event):
+        self._user_focused = False
         super().focusOutEvent(event)
         # カーソルを先頭に移動してドメインを見えるようにする
         self.home(False)  # False = 選択解除
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
-        # フォーカス取得直後に selectAll() すると Linux では
-        # QCompleter 等の内部処理と競合して「2文字目で全選択」が
-        # 再トリガーされる不具合が出るため、次のイベントループで実行する
-        QTimer.singleShot(0, self.selectAll)
+        # コンプリーターのポップアップ操作（候補クリックなど）では
+        # Qt.PopupFocusReason でフォーカスが戻ることがある。
+        # その場合は全選択を行わず、カーソル位置を保持する。
+        if event.reason() in (Qt.PopupFocusReason, Qt.ActiveWindowFocusReason):
+            return
+        if not self._user_focused:
+            self._user_focused = True
+            # フォーカス取得直後に selectAll() すると Linux では
+            # QCompleter 等の内部処理と競合するため、次のイベントループで実行する
+            QTimer.singleShot(0, self._select_all_if_focused)
+
+    def _select_all_if_focused(self):
+        """フォーカスが継続中のときだけ全選択する（コンプリーター由来の再トリガー防止）"""
+        if self._user_focused and self.hasFocus():
+            self.selectAll()
 
 
 # =====================================================================
@@ -520,7 +537,10 @@ class VerticalTabBrowser(QMainWindow):
         self._zoom_label_timer.start(2000)
     
     def check_for_updates(self):
-        """更新チェック"""
+        """更新チェック（constants.CHECK_FOR_UPDATES が False の場合はスキップ）"""
+        if not CHECK_FOR_UPDATES:
+            print("[INFO] UpdateCheck: skipped (CHECK_FOR_UPDATES=False)")
+            return
         self.update_checker = UpdateChecker()
         self.update_checker.update_available.connect(self.show_update_notification)
         self.update_checker.start()
@@ -828,9 +848,15 @@ class VerticalTabBrowser(QMainWindow):
         self._url_completer = QCompleter(self._completer_model, self)
         self._url_completer.setCaseSensitivity(Qt.CaseInsensitive)
         self._url_completer.setFilterMode(Qt.MatchContains)
-        self._url_completer.setMaxVisibleItems(10)
+        self._url_completer.setMaxVisibleItems(12)
+        # UnfilteredPopupCompletion: モデルの内容をそのまま全表示。
+        # フィルタリングは _update_url_completer() で手動管理するため
+        # QCompleter 側の自動フィルタに「🔍〇〇を検索」が消される問題を防ぐ。
+        self._url_completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
         self.url_bar.setCompleter(self._url_completer)
         self.url_bar.textEdited.connect(self._update_url_completer)
+        # 「🔍〇〇を検索」が選択された瞬間に即ナビゲートする
+        self._url_completer.activated.connect(self._on_completer_activated)
         toolbar.addWidget(self.url_bar)
         
         bookmark_add_btn = QPushButton()
@@ -1088,11 +1114,34 @@ class VerticalTabBrowser(QMainWindow):
         else:
             self.setWindowTitle(BROWSER_FULL_NAME)
     
+    # 検索候補先頭に付けるプレフィックス（navigate_to_url での判定にも使用）
+    _SEARCH_PREFIX = "\U0001f50d "  # 🔍
+
+    @staticmethod
+    def _looks_like_url(text: str) -> bool:
+        """入力が明らかにURLと判断できるか（検索エントリ表示の抑制に使用）"""
+        t = text.strip()
+        if not t or ' ' in t:
+            return False
+        # http(s):// または ftp:// スキーム付き
+        if re.match(r'^https?://', t) or re.match(r'^ftp://', t):
+            return True
+        # www. 始まり
+        if t.startswith('www.'):
+            return True
+        # ドットを含み、スペースなし（example.com など）
+        if '.' in t and not t.startswith('.') and not t.endswith('.'):
+            parts = t.split('.')
+            if len(parts) >= 2 and len(parts[-1]) >= 2:
+                return True
+        return False
+
     def _update_url_completer(self, text):
         """URLバー入力中に履歴を検索してオートコンプリート候補を更新"""
         if len(text) < 1:
             self._completer_model.setStringList([])
             return
+
         results = self.history_manager.search_history(text, limit=10)
         # URL と タイトル 両方を候補に（重複排除）
         seen = set()
@@ -1104,10 +1153,29 @@ class VerticalTabBrowser(QMainWindow):
             if title and title not in seen:
                 seen.add(title)
                 candidates.append(title)
-        self._completer_model.setStringList(candidates)
+
+        # 明らかなURL入力のときは「を検索」エントリを表示しない
+        if self._looks_like_url(text):
+            self._completer_model.setStringList(candidates)
+        else:
+            search_entry = f"{self._SEARCH_PREFIX}{text} を検索"
+            self._completer_model.setStringList([search_entry] + candidates)
+
+    def _on_completer_activated(self, text: str):
+        """コンプリーター候補がマウスクリック等で選択されたときの処理"""
+        if text.startswith(self._SEARCH_PREFIX) and text.endswith(" を検索"):
+            # 「🔍〇〇を検索」がクリックされた → 即検索
+            query = text[len(self._SEARCH_PREFIX):-len(" を検索")]
+            current_item = self.tab_list.currentItem()
+            if current_item and isinstance(current_item, TabItem):
+                url = self.process_url_or_search(query)
+                current_item.web_view.setUrl(QUrl(url))
+                # QCompleter が activated の後に候補テキストを LineEdit へ
+                # 書き戻すため、次のイベントループで上書きして打ち消す
+                QTimer.singleShot(0, lambda: self.url_bar.setText(url))
 
     def navigate_to_url(self):
-        """URL移動"""
+        """URL移動（Enterキー）: 入力テキストをそのまま URL/検索として処理する"""
         current_item = self.tab_list.currentItem()
         if current_item and isinstance(current_item, TabItem):
             text = self.url_bar.text()

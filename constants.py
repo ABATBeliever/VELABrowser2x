@@ -11,8 +11,8 @@ from pathlib import Path
 # =====================================================================
 BROWSER_NAME = "VELA"
 BROWSER_CODENAME = "Praxis"
-BROWSER_VERSION_SEMANTIC = "2.1.0.0"
-BROWSER_VERSION_NAME = "2.1.0.0 Stable"
+BROWSER_VERSION_SEMANTIC = "2.1.1.0"
+BROWSER_VERSION_NAME = "2.1.1.0 Stable"
 BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
 
 def detect_browser_target_architecture():
@@ -42,6 +42,13 @@ def detect_browser_target_architecture():
 BROWSER_TARGET_Architecture = detect_browser_target_architecture()
 
 UPDATE_CHECK_URL = f"https://abatbeliever.net/upd/VELABrowser/{BROWSER_CODENAME}/{BROWSER_TARGET_Architecture}.updat"
+
+# =====================================================================
+# 開発者向けフラグ
+# =====================================================================
+
+# アップデート確認を行うかどうか（False にすると起動時チェックをスキップ）
+CHECK_FOR_UPDATES: bool = True
 
 # =====================================================================
 # UserAgentプリセット
