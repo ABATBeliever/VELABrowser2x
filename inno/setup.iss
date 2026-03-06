@@ -3,7 +3,7 @@
 ; Inno Setup is here : https://jrsoftware.org/isdl.ph
 ; Do not locate in non-ASCII Path
 #define MyAppName "VELA Browser"
-#define MyAppVersion "2.1.1.0"
+#define MyAppVersion "2.1.2.0"
 #define MyAppPublisher "ABATBeliever"
 #define MyAppURL "https://abatbeliever.net/software/bin/VELABrowser"
 #define MyAppExeName "VELABrowser.exe"

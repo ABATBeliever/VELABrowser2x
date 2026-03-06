@@ -21,6 +21,7 @@ from constants import (
     STYLES, BROWSER_NAME, BROWSER_FULL_NAME, BROWSER_TARGET_Architecture, 
     DATA_DIR, DOWNLOADS_DIR, USER_AGENT_PRESETS, USER_AGENT_PRESET_NAMES
 )
+from browser import CHROMIUM_FLAGS
 
 
 # =====================================================================
@@ -135,18 +136,21 @@ class MainDialog(QDialog):
     
     open_url = Signal(str)
     
-    def __init__(self, history_manager, bookmark_manager, download_manager, parent=None):
+    def __init__(self, history_manager, bookmark_manager, download_manager, parent=None,
+                 current_url: str = "", current_title: str = ""):
         super().__init__(parent)
         self.history_manager = history_manager
         self.bookmark_manager = bookmark_manager
         self.download_manager = download_manager
+        self.current_url = current_url      # 呼び出し元から渡された現在ページのURL
+        self.current_title = current_title  # 呼び出し元から渡された現在ページのタイトル
         self.setWindowTitle(f"{BROWSER_NAME}について")
         self.setMinimumSize(600, 500)
-        
+
         # 設定を遅延インポート（循環参照回避）
         from PySide6.QtCore import QSettings
         self.settings = QSettings("VELABrowser", "Praxis")
-        
+
         self.init_ui()
     
     def init_ui(self):
@@ -228,7 +232,8 @@ class MainDialog(QDialog):
         from PySide6 import __version__ as pyside_version
         from PySide6.QtCore import qVersion
         
-        tech_text = f"""• フレームワーク: PySide6 {pyside_version}
+        tech_text = f"""固有情報
+• フレームワーク: PySide6 {pyside_version}
 • Qt バージョン: {qVersion()}
 • Python バージョン: {sys.version.split()[0]}
 • 検出アーキテクチャ: {BROWSER_TARGET_Architecture}
@@ -326,11 +331,20 @@ class MainDialog(QDialog):
         # プライバシー設定
         privacy_group = QGroupBox("プライバシー設定")
         privacy_layout = QVBoxLayout()
-        
+
         self.clear_on_exit_check = QCheckBox("終了時に履歴を削除")
         self.clear_on_exit_check.setChecked(self.settings.value("clear_on_exit", False, type=bool))
         privacy_layout.addWidget(self.clear_on_exit_check)
-        
+
+        self.do_not_track_check = QCheckBox("Do Not Track (DNT) を送信する")
+        self.do_not_track_check.setToolTip(
+            "HTTP ヘッダー 'DNT: 1' を全リクエストに付加します。\n"
+            "対応しているサイトに対してトラッキング拒否の意思を伝えます。\n"
+            "（サイト側が従う保証はありません）"
+        )
+        self.do_not_track_check.setChecked(self.settings.value("do_not_track", True, type=bool))
+        privacy_layout.addWidget(self.do_not_track_check)
+
         privacy_group.setLayout(privacy_layout)
         layout.addWidget(privacy_group)
         
@@ -378,8 +392,7 @@ class MainDialog(QDialog):
         
         advanced_group.setLayout(advanced_layout)
         layout.addWidget(advanced_group)
-        
-        # UserAgent設定
+
         useragent_group = QGroupBox("UserAgent設定")
         useragent_layout = QVBoxLayout()
         
@@ -399,6 +412,33 @@ class MainDialog(QDialog):
         
         useragent_group.setLayout(useragent_layout)
         layout.addWidget(useragent_group)
+        
+        experimental_group = QGroupBox("実験的機能")
+        experimental_layout = QVBoxLayout()
+
+        experimental_layout.addSpacing(8)
+
+        flags_label = QLabel("実験的機能:")
+        flags_label.setStyleSheet("font-weight: bold; color: #c0392b;")
+        experimental_layout.addWidget(flags_label)
+
+        warn_label = QLabel(
+            "⚠ 予期せぬ結果を招く可能性があります ⚠"
+        )
+        warn_label.setStyleSheet("color: #888; font-size: 10px;")
+        warn_label.setWordWrap(True)
+        experimental_layout.addWidget(warn_label)
+
+        self._flag_checks: dict[str, QCheckBox] = {}
+        for key, (flag_str, desc) in CHROMIUM_FLAGS.items():
+            cb = QCheckBox(desc)
+            cb.setToolTip(flag_str)
+            cb.setChecked(self.settings.value(key, False, type=bool))
+            experimental_layout.addWidget(cb)
+            self._flag_checks[key] = cb
+
+        experimental_group.setLayout(experimental_layout)
+        layout.addWidget(experimental_group)
         
         layout.addStretch()
         
@@ -445,38 +485,46 @@ class MainDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(10, 10, 10, 10)
-        
+
         # ツールバー
         toolbar_layout = QHBoxLayout()
-        
+
+        add_btn = QPushButton("新規追加")
+        add_btn.setStyleSheet(STYLES['button_primary'])
+        add_btn.setToolTip("現在開いているページをブックマークに追加します")
+        add_btn.clicked.connect(self.add_current_page_bookmark)
+        # URLが渡されていない場合（ブックマークタブ以外から開かれた場合）は無効化
+        add_btn.setEnabled(bool(self.current_url and not self.current_url.startswith("about:")))
+        toolbar_layout.addWidget(add_btn)
+
         delete_btn = QPushButton("削除")
         delete_btn.setStyleSheet(STYLES['button_secondary'])
         delete_btn.clicked.connect(self.delete_selected_bookmark)
         toolbar_layout.addWidget(delete_btn)
-        
+
         toolbar_layout.addStretch()
-        
+
         export_btn = QPushButton("エクスポート")
         export_btn.setStyleSheet(STYLES['button_secondary'])
         export_btn.clicked.connect(self.export_bookmarks)
         toolbar_layout.addWidget(export_btn)
-        
+
         import_btn = QPushButton("インポート")
         import_btn.setStyleSheet(STYLES['button_secondary'])
         import_btn.clicked.connect(self.import_bookmarks)
         toolbar_layout.addWidget(import_btn)
-        
+
         layout.addLayout(toolbar_layout)
-        
+
         # ブックマークツリー
         self.bookmark_tree = QTreeWidget()
         self.bookmark_tree.setHeaderLabels(["タイトル", "URL"])
         self.bookmark_tree.setColumnWidth(0, 300)
         self.bookmark_tree.itemDoubleClicked.connect(self.on_bookmark_item_double_clicked)
         layout.addWidget(self.bookmark_tree)
-        
+
         self.load_bookmarks()
-        
+
         return widget
     
     def browse_download_dir(self):
@@ -500,6 +548,7 @@ class MainDialog(QDialog):
         self.settings.setValue("save_session", self.save_session_check.isChecked())
         self.settings.setValue("search_engine", self.search_engine_combo.currentIndex())
         self.settings.setValue("clear_on_exit", self.clear_on_exit_check.isChecked())
+        self.settings.setValue("do_not_track", self.do_not_track_check.isChecked())
         self.settings.setValue("download_dir", self.download_dir_input.text())
         self.settings.setValue("ask_download", self.ask_download_check.isChecked())
         self.settings.setValue("enable_javascript", self.javascript_check.isChecked())
@@ -508,9 +557,18 @@ class MainDialog(QDialog):
         self.settings.setValue("enable_hardware_acceleration", self.hardware_acceleration_check.isChecked())
         self.settings.setValue("ua_preset", self.ua_preset_combo.currentIndex())
         self.settings.setValue("ua_custom", self.ua_custom_input.text())
+
+        # 実験的機能
+        flags_changed = False
+        for key, cb in self._flag_checks.items():
+            old_val = self.settings.value(key, False, type=bool)
+            new_val = cb.isChecked()
+            self.settings.setValue(key, new_val)
+            if old_val != new_val:
+                flags_changed = True
         
         self.settings.sync()
-        
+
         # 親ブラウザに設定を即時反映
         from browser import VerticalTabBrowser
         browser = self.parent()
@@ -518,8 +576,15 @@ class MainDialog(QDialog):
             browser = browser.parent()
         if browser:
             browser.apply_settings()
-        
-        QMessageBox.information(self, "保存完了", "設定を保存しました。一部の設定は再起動後に完全に有効になります。")
+
+        if flags_changed:
+            QMessageBox.information(
+                self, "保存完了",
+                "設定を保存しました。\n\n"
+                "Chromium フラグの変更を反映するには\nVELA を再起動してください。"
+            )
+        else:
+            QMessageBox.information(self, "保存完了", "設定を保存しました。一部の設定は再起動後に完全に有効になります。")
     def reset_settings_to_default(self):
         """設定を既定値に戻す"""
         reply = QMessageBox.question(
@@ -533,6 +598,7 @@ class MainDialog(QDialog):
             self.save_session_check.setChecked(True)
             self.search_engine_combo.setCurrentIndex(0)
             self.clear_on_exit_check.setChecked(False)
+            self.do_not_track_check.setChecked(True)
             self.download_dir_input.setText(str(DOWNLOADS_DIR))
             self.ask_download_check.setChecked(True)
             self.javascript_check.setChecked(True)
@@ -541,6 +607,9 @@ class MainDialog(QDialog):
             self.hardware_acceleration_check.setChecked(True)
             self.ua_preset_combo.setCurrentIndex(0)
             self.ua_custom_input.setText("")
+            # 実験的機能
+            for cb in self._flag_checks.values():
+                cb.setChecked(False)
             
             # 保存
             self.save_settings()
@@ -596,6 +665,22 @@ class MainDialog(QDialog):
         
         self.bookmark_tree.expandAll()
     
+    def add_current_page_bookmark(self):
+        """現在のページをブックマークに追加する（AddBookmarkDialog を使用）"""
+        if not self.current_url:
+            return
+        folders = self.bookmark_manager.get_folders()
+        dialog = AddBookmarkDialog(
+            self.current_url,
+            self.current_title or self.current_url,
+            folders,
+            self
+        )
+        if dialog.exec():
+            title, url, folder = dialog.get_data()
+            self.bookmark_manager.add_bookmark(title, url, folder)
+            self.load_bookmarks()  # ツリーを更新
+
     def delete_selected_bookmark(self):
         current_item = self.bookmark_tree.currentItem()
         if current_item:

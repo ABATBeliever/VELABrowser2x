@@ -4,8 +4,64 @@ VELA Browser - メインブラウザウィンドウ
 """
 
 import re
+import sys
+import os
 from pathlib import Path
 from urllib.parse import quote_plus
+
+# =====================================================================
+# Chromium フラグ設定（QApplication より前に設定する必要がある）
+# =====================================================================
+# QCoreApplication.setAttribute より前、かつ QApplication 生成前に
+# sys.argv に追加する方式で Chromium コマンドラインスイッチを渡す。
+# ここではモジュールインポート時に設定する。
+# =====================================================================
+
+
+# =====================================================================
+# Chromium フラグ定義（設定から読み込んで適用）
+# =====================================================================
+# フラグは QApplication 生成前に sys.argv へ追加する必要がある。
+# VELABrowser.py の main() から呼び出す。
+# =====================================================================
+
+# 設定キー → (フラグ文字列, 説明)
+CHROMIUM_FLAGS: dict[str, tuple[str, str]] = {
+    "flag_hevc":         ("--enable-features=PlatformHEVCDecoderSupport",            "H.265/HEVC デコードを有効化（YouTube Live等）"),
+    "flag_vaapi":        ("--enable-features=VaapiVideoDecodeLinuxGL,VaapiVideoEncoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL", "VA-API GPU デコード/エンコードの有効化（Linux向け）"),
+    "flag_mediafound":   ("--enable-features=MediaFoundationH264Encoding",           "Media Foundation H.264を有効化（Windows向け）"),
+    "flag_ozone":        ("--enable-features=UseOzonePlatform",                      "Ozone プラットフォームを有効化（Linux Wayland向け）"),
+    "flag_wasm_simd":    ("--enable-features=WebAssemblySimd",                       "WebAssembly SIMDを有効化"),
+    "flag_wasm_threads": ("--enable-features=WebAssemblyThreads,SharedArrayBuffer",  "WebAssembly スレッド / SharedArrayBuffer を有効化"),
+    "flag_gpu_raster":   ("--enable-gpu-rasterization --enable-oop-rasterization",   "GPU ラスタライズ の有効化"),
+    "flag_zero_copy":    ("--enable-zero-copy",                                      "ゼロコピー テクスチャ の有効化"),
+    "flag_ignore_gpu":   ("--ignore-gpu-blocklist --disable-gpu-driver-bug-workarounds", "GPU ブロックリストを無視し、古いGPUを活用する"),
+    "flag_overlays":     ("--enable-hardware-overlays=single-fullscreen",            "ハードウェアオーバーレイ"),
+    "flag_autoplay":     ("--autoplay-policy=no-user-gesture-required",              "自動再生制限を解除"),
+    "flag_raw_draw":     ("--enable-raw-draw",                                       "Raw Draw の有効化"),
+    "flag_no_cros_vd":   ("--disable-features=UseChromeOSDirectVideoDecoder",        "ChromeOS DirectVideoDecoder を無効化"),
+}
+
+
+def apply_chromium_flags_from_settings():
+    """
+    QSettings から各フラグの有効/無効を読み取り、有効なものだけ sys.argv に追加する。
+    QApplication 生成前に VELABrowser.py の main() から呼ぶこと。
+    """
+    from PySide6.QtCore import QSettings
+    s = QSettings("VELABrowser", "Praxis")
+    applied = []
+    for key, (flag_str, _desc) in CHROMIUM_FLAGS.items():
+        if s.value(key, False, type=bool):
+            for token in flag_str.split():
+                if token not in sys.argv:
+                    sys.argv.append(token)
+            applied.append(key)
+    if applied:
+        print(f"[INFO] Chromium flags applied: {', '.join(applied)}")
+    else:
+        print("[INFO] Chromium flags: all disabled")
+
 
 from PySide6.QtCore import Qt, QUrl, QSettings, QTimer, QStringListModel
 from PySide6.QtWidgets import (
@@ -14,7 +70,9 @@ from PySide6.QtWidgets import (
     QFileDialog, QApplication, QMenu, QLabel, QProgressBar, QCompleter
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
+from PySide6.QtWebEngineCore import (
+    QWebEngineProfile, QWebEngineSettings, QWebEngineUrlRequestInterceptor
+)
 from PySide6.QtGui import QFont, QAction, QShortcut, QKeySequence
 import qtawesome as qta
 
@@ -30,8 +88,30 @@ from PySide6.QtWidgets import QListWidgetItem
 
 
 # =====================================================================
-# URLバー（フォーカス離脱時にドメインが見えるよう先頭にスクロール）
+# DNT（Do Not Track）URLリクエストインターセプター
 # =====================================================================
+
+class DntRequestInterceptor(QWebEngineUrlRequestInterceptor):
+    """
+    全リクエストに DNT ヘッダーを付加するインターセプター。
+    enabled=True のとき DNT: 1、False のとき DNT: 0 を送信する。
+    RFC 7230 に従い値はバイト列で渡す。
+    """
+
+    def __init__(self, enabled: bool = False, parent=None):
+        super().__init__(parent)
+        self._enabled = enabled
+
+    def set_enabled(self, enabled: bool):
+        self._enabled = enabled
+
+    def interceptRequest(self, info):
+        info.setHttpHeader(b"DNT", b"1" if self._enabled else b"0")
+
+
+
+
+
 
 class UrlLineEdit(QLineEdit):
     """フォーカスを外したときに先頭（ドメイン部分）が表示されるURLバー"""
@@ -77,29 +157,25 @@ class CustomWebEnginePage(QWebEnginePage):
     
     def __init__(self, profile, parent=None):
         super().__init__(profile, parent)
-        self._profile = profile  # プロファイルへの参照を保持
-    
+        self._profile = profile
+
     def createWindow(self, window_type):
-        """新しいウィンドウ/タブが要求された時の処理"""
-        print("[INFO] TabControl: Add")
-        # 親ウィジェット（ブラウザ）への参照を取得
+        """
+        新しいウィンドウ/タブが要求された時の処理。
+        （2.1.2.0 でゴーストオーディオ・重複タブを修正済み）
+        """
+        print("[INFO] TabControl: createWindow requested")
         browser = self.parent()
         while browser and not isinstance(browser, VerticalTabBrowser):
             browser = browser.parent()
-        
+
         if browser:
-            # ブラウザに新しいページの作成を委譲
-            page = CustomWebEnginePage(self._profile, browser)
-            page.new_tab_requested.connect(self.new_tab_requested.emit)
-            page.urlChanged.connect(lambda url: self.new_tab_requested.emit(url))
-            # ブラウザの一時ページリストに追加して参照を保持
-            if not hasattr(browser, '_temp_pages'):
-                browser._temp_pages = []
-            browser._temp_pages.append(page)
-            return page
-        else:
-            # フォールバック
-            return super().createWindow(window_type)
+            web_view = browser.add_new_tab(url="about:blank", activate=False, incognito=False,
+                                           _return_view=True)
+            if web_view is not None:
+                return web_view.page()
+
+        return super().createWindow(window_type)
 
 
 # =====================================================================
@@ -197,9 +273,7 @@ class VerticalTabBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
         self.tabs = []
-        self._temp_pages = []
         self._closed_tab_stack = []  # 閉じたタブのURLスタック（複数対応）
-        self._opening_pdf_urls = set()  # PDFループ防止: 処理中URLのセット
         self._zoom_levels = {}  # タブごとのズーム倍率 {web_view: float}
         
         # 永続化プロファイルを作成（Cookie、LocalStorageなどが保存される）
@@ -207,12 +281,18 @@ class VerticalTabBrowser(QMainWindow):
         self.profile.setPersistentStoragePath(str(PROFILE_PATH))
         self.profile.setCachePath(str(CACHE_DIR / "profile"))
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
-        
+
         # シークレット用プロファイル（非永続）
         self.incognito_profile = QWebEngineProfile("VELAIncognito")
         self.incognito_profile.setCachePath(str(INCOGNITO_CACHE_PATH))
         self.incognito_profile.setPersistentStoragePath(str(INCOGNITO_STATE_PATH))
         self.incognito_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+
+        # DNT インターセプターを両プロファイルに登録（apply_settings で有効/無効を切り替える）
+        self._dnt_interceptor = DntRequestInterceptor(enabled=False, parent=self)
+        self._dnt_interceptor_incognito = DntRequestInterceptor(enabled=False, parent=self)
+        self.profile.setUrlRequestInterceptor(self._dnt_interceptor)
+        self.incognito_profile.setUrlRequestInterceptor(self._dnt_interceptor_incognito)
         
         self.history_manager = HistoryManager()
         self.bookmark_manager = BookmarkManager()
@@ -236,8 +316,8 @@ class VerticalTabBrowser(QMainWindow):
                                  self.settings.value("enable_javascript", True, type=bool))
         web_settings.setAttribute(QWebEngineSettings.AutoLoadImages,
                                  self.settings.value("auto_load_images", True, type=bool))
-        # PDFをブラウザ内で表示（ダウンロードしない）
-        web_settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
+        # PDFはダウンロードとして処理する
+        web_settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, False)
         
         # ハードウェアアクセラレーション設定
         if not self.settings.value("enable_hardware_acceleration", True, type=bool):
@@ -250,7 +330,7 @@ class VerticalTabBrowser(QMainWindow):
         incognito_settings.setAttribute(QWebEngineSettings.JavascriptEnabled,
                                        self.settings.value("enable_javascript", True, type=bool))
         incognito_settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)
-        incognito_settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
+        incognito_settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, False)
         
         # UserAgent設定
         ua_preset = self.settings.value("ua_preset", 0, type=int)
@@ -263,6 +343,15 @@ class VerticalTabBrowser(QMainWindow):
                 self.profile.setHttpUserAgent(ua)
                 print(f"[INFO] UserAgent set to preset {ua_preset}")
         
+        # Do Not Track ヘッダー設定
+        # Do Not Track ヘッダー設定
+        # QWebEngineProfile に直接 DNT API はないため、
+        # setUrlRequestInterceptor で全リクエストに DNT ヘッダーを付加する。
+        self.do_not_track = self.settings.value("do_not_track", False, type=bool)
+        self._dnt_interceptor.set_enabled(self.do_not_track)
+        self._dnt_interceptor_incognito.set_enabled(self.do_not_track)
+        print(f"[INFO] DNT header set to: {'1' if self.do_not_track else '0'}")
+
         # downloadRequested の重複接続を防ぐために一度切断してから接続
         # 初回起動時は未接続のため RuntimeWarning が出るが無害なので抑制する
         import warnings
@@ -283,27 +372,8 @@ class VerticalTabBrowser(QMainWindow):
     def on_download_requested(self, download):
         """ダウンロード要求時の処理"""
         filename = download.downloadFileName()
-        url = download.url().toString()
         print(f"[INFO] Download requested: {filename}")
-        
-        # PDFはダウンロードせずブラウザ内で表示
-        # ただし既にそのURLをタブで開こうとしている場合はスキップ（無限ループ防止）
-        mime = download.mimeType() if hasattr(download, 'mimeType') else ""
-        is_pdf = (
-            mime == "application/pdf"
-            or filename.lower().endswith(".pdf")
-            or url.lower().endswith(".pdf")
-            or ".pdf?" in url.lower()
-        )
-        if is_pdf and url not in self._opening_pdf_urls:
-            print(f"[INFO] PDF detected, opening in tab: {url}")
-            download.cancel()
-            self._opening_pdf_urls.add(url)
-            self.add_new_tab(url, activate=True)
-            # タブのロード完了後にセットから削除
-            QTimer.singleShot(5000, lambda: self._opening_pdf_urls.discard(url))
-            return
-        
+
         # 設定からダウンロード先を取得（constants の DOWNLOADS_DIR ではなく QSettings を優先）
         download_dir = Path(self.settings.value("download_dir", str(DOWNLOADS_DIR)))
         try:
@@ -363,25 +433,30 @@ class VerticalTabBrowser(QMainWindow):
     def restore_session(self):
         """セッションを復元"""
         startup_action = self.settings.value("startup_action", 0, type=int)
-        
+
         if startup_action == 0 and self.settings.value("save_session", True, type=bool):
             status, session_data = self.session_manager.load_session()
-            
+
             if status == "newer_version":
-                # より新しいVELAが書いたセッションは無視して空スタートを促す
-                # （警告は VELABrowser.py の起動前チェックで表示済み）
                 pass
             elif status in ("ok", "converted"):
                 if session_data:
                     tabs_data = session_data.get("tabs", [])
                     active_index = session_data.get("active_index", 0)
-                    
+
                     if tabs_data:
+                        opened = 0
                         for i, tab_data in enumerate(tabs_data):
+                            url = tab_data.get("url", "")
+                            # about: / chrome: など内部スキームは復元しない
+                            if not url or url.startswith("about:") or url.startswith("chrome:"):
+                                continue
                             activate = (i == active_index)
-                            self.add_new_tab(tab_data.get("url", "https://www.google.com"), activate=activate)
-                        return
-        
+                            self.add_new_tab(url, activate=activate)
+                            opened += 1
+                        if opened > 0:
+                            return
+
         if startup_action == 1:
             homepage = self.settings.value("homepage", "https://www.google.com")
             self.add_new_tab(homepage)
@@ -392,29 +467,35 @@ class VerticalTabBrowser(QMainWindow):
         """現在のセッションを保存"""
         if not self.settings.value("save_session", True, type=bool):
             return
-        
+
         tabs_data = []
         current_index = self.tab_list.currentRow()
-        
-        # シークレットタブを除外した有効なタブのみ収集
+
+        # シークレットタブを除外した通常タブのみ収集
         normal_tab_indices = []
         for i in range(self.tab_list.count()):
             item = self.tab_list.item(i)
-            if isinstance(item, TabItem) and not item.incognito:
-                normal_tab_indices.append(i)
-                tabs_data.append({
-                    "url": item.web_view.url().toString(),
-                    "title": item.web_view.title() or ""
-                })
-        
-        # アクティブタブのインデックスを正規化（シークレット除外後のインデックス）
+            if not isinstance(item, TabItem):
+                continue
+            if item.incognito:
+                continue
+            url = item.web_view.url().toString()
+            # about: / chrome: など復元しても意味のないURLも除外
+            if not url or url.startswith("about:") or url.startswith("chrome:"):
+                continue
+            normal_tab_indices.append(i)
+            tabs_data.append({
+                "url": url,
+                "title": item.web_view.title() or ""
+            })
+
+        # アクティブタブのインデックスを正規化（除外後のインデックス）
         active_normal_index = 0
         for idx, original_i in enumerate(normal_tab_indices):
             if original_i == current_index:
                 active_normal_index = idx
                 break
-        
-        # active_index はリスト全体に1つだけ付ける
+
         result = {"tabs": tabs_data, "active_index": active_normal_index}
         self.session_manager.save_session(result)
     
@@ -647,8 +728,19 @@ class VerticalTabBrowser(QMainWindow):
             menu.exec(sender.mapToGlobal(sender.rect().bottomLeft()))
     
     def show_bookmarks_dialog(self):
-        """ブックマークダイアログを表示"""
-        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
+        """ブックマークダイアログを表示（現在のページ情報を渡す）"""
+        # 現在のタブのURLとタイトルを取得してダイアログに渡す
+        current_url = ""
+        current_title = ""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem):
+            current_url = current_item.web_view.url().toString()
+            current_title = current_item.web_view.title()
+
+        dialog = MainDialog(
+            self.history_manager, self.bookmark_manager, self.download_manager, self,
+            current_url=current_url, current_title=current_title
+        )
         dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
         dialog.tab_widget.setCurrentIndex(3)  # ブックマークタブを選択
         dialog.exec()
@@ -687,7 +779,8 @@ class VerticalTabBrowser(QMainWindow):
             "fullscreen": self.settings.value("allow_fullscreen", True, type=bool),
             "hw_accel": self.settings.value("enable_hardware_acceleration", True, type=bool),
             "ua_preset": self.settings.value("ua_preset", 0, type=int),
-            "ua_custom": self.settings.value("ua_custom", "")
+            "ua_custom": self.settings.value("ua_custom", ""),
+            "do_not_track": self.settings.value("do_not_track", False, type=bool),
         }
         
         dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
@@ -701,7 +794,8 @@ class VerticalTabBrowser(QMainWindow):
             "fullscreen": self.settings.value("allow_fullscreen", True, type=bool),
             "hw_accel": self.settings.value("enable_hardware_acceleration", True, type=bool),
             "ua_preset": self.settings.value("ua_preset", 0, type=int),
-            "ua_custom": self.settings.value("ua_custom", "")
+            "ua_custom": self.settings.value("ua_custom", ""),
+            "do_not_track": self.settings.value("do_not_track", False, type=bool),
         }
         
         if old_settings != new_settings:
@@ -742,7 +836,8 @@ class VerticalTabBrowser(QMainWindow):
         if current_item and isinstance(current_item, TabItem):
             dialog = SavePageDialog(current_item.web_view, self)
             dialog.exec()
-    
+
+
     def add_bookmark_from_current_tab(self):
         """現在のタブをブックマークに追加"""
         current_item = self.tab_list.currentItem()
@@ -861,9 +956,9 @@ class VerticalTabBrowser(QMainWindow):
         
         bookmark_add_btn = QPushButton()
         bookmark_add_btn.setIcon(qta.icon('fa5s.star', color='#f4c430'))
-        bookmark_add_btn.setToolTip("ブックマークに追加")
+        bookmark_add_btn.setToolTip("ブックマーク")
         bookmark_add_btn.setFixedSize(32, 32)
-        bookmark_add_btn.clicked.connect(self.add_bookmark_from_current_tab)
+        bookmark_add_btn.clicked.connect(self.show_bookmarks_dialog)
         toolbar.addWidget(bookmark_add_btn)
         
         menu_btn = QPushButton()
@@ -943,45 +1038,52 @@ class VerticalTabBrowser(QMainWindow):
         else:
             return self.get_search_url(text)
     
-    def add_new_tab(self, url, activate=True, incognito=False):
-        """新規タブ追加"""
+    def add_new_tab(self, url, activate=True, incognito=False, _return_view=False):
+        """
+        新規タブ追加。
+
+        _return_view=True の場合は作成した QWebEngineView を返す。
+        createWindow からの呼び出し時に使用する内部フラグ。
+        """
         web_view = QWebEngineView()
-        
-        # シークレットタブは専用プロファイルを使用
+
+        # createWindow 経由の場合は呼び出し元ページのプロファイルを引き継ぐ
+        # 通常は self.profile、シークレットは self.incognito_profile
         profile = self.incognito_profile if incognito else self.profile
         page = CustomWebEnginePage(profile, web_view)
-        page.new_tab_requested.connect(
-            lambda u: self.add_new_tab(u.toString(), activate=True, incognito=incognito))
         page.fullScreenRequested.connect(self.handle_fullscreen_request)
-        
+
+        # new_tab_requested は createWindow 経由では使わないが、
+        # JavaScript の window.open() など他の経路で発火することがある。
+        # ただし二重タブ防止のため接続しない（createWindow が直接タブを作る）。
+
         web_view.setPage(page)
         web_view.setUrl(QUrl(url))
-        
+
         web_view.titleChanged.connect(lambda title: self.update_tab_title(web_view, title))
         web_view.urlChanged.connect(lambda u: self.update_url_bar(web_view, u))
         web_view.loadFinished.connect(lambda: self.on_load_finished(web_view, incognito))
         web_view.loadStarted.connect(lambda: self.on_load_started(web_view))
         web_view.loadProgress.connect(lambda p: self.on_load_progress(web_view, p))
-        
+
         tab_item = TabItem("新しいタブ", web_view, incognito=incognito)
-        
+
         self.tab_list.addItem(tab_item)
         self.tab_list.setItemWidget(tab_item, tab_item.widget)
-        
+
         # 閉じるボタンのシグナル接続
         tab_item.widget.close_requested.connect(lambda: self.close_tab_by_item(tab_item))
-        
+
         self.tabs.append(web_view)
-        
-        # 一時ページリストをクリア（ガベージコレクション対策）
-        if hasattr(self, '_temp_pages'):
-            self._temp_pages.clear()
-        
+
         if activate:
             self.tab_list.setCurrentItem(tab_item)
-        
-        mode = "Seacret" if incognito else "Normal"
+
+        mode = "Incognito" if incognito else "Normal"
         print(f"[INFO] TabControl: Add ({mode})")
+
+        if _return_view:
+            return web_view
     
     def handle_fullscreen_request(self, request):
         """全画面表示リクエスト処理"""
@@ -1060,29 +1162,31 @@ class VerticalTabBrowser(QMainWindow):
         """タブ切り替え"""
         if current is None:
             return
-        
+
+        # 既存ウィジェットをコンテナから取り外す
         for i in reversed(range(self.web_layout.count())):
             widget = self.web_layout.itemAt(i).widget()
             if widget:
                 self.web_layout.removeWidget(widget)
                 widget.setParent(None)
-        
+
         tab_item = current
+
+        # ----- 通常の Web タブ -----
         web_view = tab_item.web_view
         self.web_layout.addWidget(web_view)
         web_view.show()
-        
+
         self.url_bar.setText(web_view.url().toString())
         if not self.url_bar.hasFocus():
             self.url_bar.home(False)
         zoom = self._zoom_levels.get(web_view, 1.0)
         web_view.setZoomFactor(zoom)
-        
+        self.update_window_title(web_view.title())
+
         # ロード進捗バーをリセット
         self._stop_progress_bar()
-        
-        # ウィンドウタイトルを更新
-        self.update_window_title(web_view.title())
+
     
     def update_tab_title(self, web_view, title):
         """タブタイトル更新"""
@@ -1263,11 +1367,9 @@ class VerticalTabBrowser(QMainWindow):
                     url = item.web_view.url().toString()
                     if url and not url.startswith("about:") and not url.startswith("chrome:"):
                         self._closed_tab_stack.append(url)
-                        # スタックは最大20件
                         if len(self._closed_tab_stack) > 20:
                             self._closed_tab_stack.pop(0)
                 self.tab_list.takeItem(i)
-                # ズーム情報もクリーンアップ
                 self._zoom_levels.pop(item.web_view, None)
                 item.web_view.deleteLater()
                 if item.web_view in self.tabs:
