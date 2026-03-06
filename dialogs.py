@@ -671,13 +671,14 @@ class MainDialog(QDialog):
             return
         folders = self.bookmark_manager.get_folders()
         dialog = AddBookmarkDialog(
-            self.current_url,
             self.current_title or self.current_url,
+            self.current_url,
             folders,
             self
         )
         if dialog.exec():
-            title, url, folder = dialog.get_data()
+            result = dialog.get_result()
+            title, url, folder = result["title"], result["url"], result["folder"]
             self.bookmark_manager.add_bookmark(title, url, folder)
             self.load_bookmarks()  # ツリーを更新
 
