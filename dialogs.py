@@ -18,9 +18,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtWebEngineCore import QWebEngineDownloadRequest
 
 from constants import (
-    STYLES, BROWSER_NAME, BROWSER_FULL_NAME, BROWSER_TARGET_Architecture, 
-    DATA_DIR, DOWNLOADS_DIR, USER_AGENT_PRESETS, USER_AGENT_PRESET_NAMES
+    STYLES, BROWSER_NAME, BROWSER_FULL_NAME, BROWSER_TARGET_Architecture,
+    DATA_DIR, DOWNLOADS_DIR, USER_AGENT_PRESETS, USER_AGENT_PRESET_NAMES,
+    THEMES_DIR
 )
+from theme import theme_engine
 from browser import CHROMIUM_FLAGS
 
 
@@ -167,6 +169,8 @@ class MainDialog(QDialog):
         self.tab_widget.addTab(self.create_history_tab(), "閲覧履歴")
         self.tab_widget.addTab(self.create_bookmarks_tab(), "ブックマーク")
         self.tab_widget.addTab(self.create_downloads_tab(), "ダウンロード")
+        # ブックマークタブ(index=3)に切り替わるたびに add_btn を再評価
+        self.tab_widget.currentChanged.connect(self._on_tab_widget_changed)
         
         layout.addWidget(self.tab_widget)
         
@@ -188,29 +192,34 @@ class MainDialog(QDialog):
         widget = QVBoxLayout()
         container = QWidget()
         container.setLayout(widget)
-        container.setStyleSheet("background-color: #ffffff;")
-        
+        # ハードコード背景を除去 → テーマの bg_surface を継承
+        container.setStyleSheet(
+            f"background-color: {STYLES.get('_bg_surface', '')};"
+            if '_bg_surface' in STYLES else ""
+        )
+
         widget.setContentsMargins(30, 30, 30, 30)
         widget.setSpacing(20)
         
         from constants import BROWSER_VERSION_NAME
-        
-        title_label = QLabel(f"<h1 style='color: #333333;'>{BROWSER_NAME} Praxis</h1>")
+        from theme import theme_engine as _te
+        _c = _te.c if _te else lambda k: ""
+
+        title_label = QLabel(f"<h1>{BROWSER_NAME} Praxis</h1>")
         title_label.setAlignment(Qt.AlignCenter)
         widget.addWidget(title_label)
         
-        version_label = QLabel(f"<h3 style='color: #333333;'>バージョン: {BROWSER_VERSION_NAME}</h3>")
+        version_label = QLabel(f"<h3>バージョン: {BROWSER_VERSION_NAME}</h3>")
         version_label.setAlignment(Qt.AlignCenter)
         widget.addWidget(version_label)
         
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setFrameShadow(QFrame.Sunken)
-        line.setStyleSheet("background-color: #e0e0e0;")
         widget.addWidget(line)
         
         description = QLabel(
-            f"<p style='font-size: 11pt; color: #333333;'>{BROWSER_NAME}は、左側に縦タブを配置した<br>"
+            f"<p style='font-size: 11pt;'>{BROWSER_NAME}は、左側に縦タブを配置した<br>"
             "シンプルで使いやすいWebブラウザです。</p>"
         )
         description.setAlignment(Qt.AlignCenter)
@@ -219,30 +228,27 @@ class MainDialog(QDialog):
         tech_info = QTextEdit()
         tech_info.setReadOnly(True)
         tech_info.setMaximumHeight(120)
-        tech_info.setStyleSheet("""
-            QTextEdit {
-                background-color: #f9f9f9;
-                color: #333333;
-                border: 1px solid #e0e0e0;
-                border-radius: 4px;
-                padding: 8px;
-            }
-        """)
+        # テーマカラーで塗る
+        tech_info.setStyleSheet(
+            f"QTextEdit {{ background-color: {_c('bg_surface_dim')}; "
+            f"color: {_c('text_primary')}; "
+            f"border: 1px solid {_c('border_light')}; "
+            f"border-radius: 4px; padding: 8px; }}"
+        )
         
         from PySide6 import __version__ as pyside_version
         from PySide6.QtCore import qVersion
         
-        tech_text = f"""固有情報
-• フレームワーク: PySide6 {pyside_version}
-• Qt バージョン: {qVersion()}
-• Python バージョン: {sys.version.split()[0]}
+        tech_text = f"""• Python バージョン : {sys.version.split()[0]}
+• PySide バージョン : {pyside_version}
+• Qt バージョン     : {qVersion()}
 • 検出アーキテクチャ: {BROWSER_TARGET_Architecture}
 • データディレクトリ: {DATA_DIR}"""
         tech_info.setPlainText(tech_text)
         widget.addWidget(tech_info)
         
         copyright_label = QLabel(
-            "<p style='color: #666666; font-size: 9pt;'>"
+            f"<p style='color: {_c('text_muted')}; font-size: 9pt;'>"
             "© 2025-2026, ABATBeliever.<br>"
             "Under LGPL v3 License"
             "</p>"
@@ -285,19 +291,17 @@ class MainDialog(QDialog):
         line.setFrameShape(QFrame.HLine)
         line.setFrameShadow(QFrame.Sunken)
         layout.addWidget(line)
-        
-        
         # 一般設定
         general_group = QGroupBox("一般設定")
         general_layout = QVBoxLayout()
-        
+
         homepage_layout = QHBoxLayout()
         homepage_layout.addWidget(QLabel("ホームページ:"))
         self.homepage_input = QLineEdit()
         self.homepage_input.setText(self.settings.value("homepage", "https://www.google.com"))
         homepage_layout.addWidget(self.homepage_input)
         general_layout.addLayout(homepage_layout)
-        
+
         startup_layout = QHBoxLayout()
         startup_layout.addWidget(QLabel("起動時:"))
         self.startup_combo = QComboBox()
@@ -305,11 +309,25 @@ class MainDialog(QDialog):
         self.startup_combo.setCurrentIndex(self.settings.value("startup_action", 0, type=int))
         startup_layout.addWidget(self.startup_combo)
         general_layout.addLayout(startup_layout)
-        
+
         self.save_session_check = QCheckBox("終了時にセッションを保存")
         self.save_session_check.setChecked(self.settings.value("save_session", True, type=bool))
         general_layout.addWidget(self.save_session_check)
-        
+
+        theme_select_layout = QHBoxLayout()
+        theme_select_layout.addWidget(QLabel("テーマ:"))
+        self.theme_combo = QComboBox()
+        if theme_engine is not None:
+            self.theme_combo.addItems(theme_engine.list_themes())
+            current = theme_engine.current_theme()
+            idx = self.theme_combo.findText(current)
+            if idx >= 0:
+                self.theme_combo.setCurrentIndex(idx)
+        else:
+            self.theme_combo.addItem("Default")
+        theme_select_layout.addWidget(self.theme_combo)
+        general_layout.addLayout(theme_select_layout)
+
         general_group.setLayout(general_layout)
         layout.addWidget(general_group)
         
@@ -489,13 +507,12 @@ class MainDialog(QDialog):
         # ツールバー
         toolbar_layout = QHBoxLayout()
 
-        add_btn = QPushButton("新規追加")
-        add_btn.setStyleSheet(STYLES['button_primary'])
-        add_btn.setToolTip("現在開いているページをブックマークに追加します")
-        add_btn.clicked.connect(self.add_current_page_bookmark)
-        # URLが渡されていない場合（ブックマークタブ以外から開かれた場合）は無効化
-        add_btn.setEnabled(bool(self.current_url and not self.current_url.startswith("about:")))
-        toolbar_layout.addWidget(add_btn)
+        self.add_bookmark_btn = QPushButton("新規追加")
+        self.add_bookmark_btn.setStyleSheet(STYLES['button_primary'])
+        self.add_bookmark_btn.setToolTip("現在開いているページをブックマークに追加します")
+        self.add_bookmark_btn.clicked.connect(self.add_current_page_bookmark)
+        self._update_add_bookmark_btn()  # 初期状態を設定
+        toolbar_layout.addWidget(self.add_bookmark_btn)
 
         delete_btn = QPushButton("削除")
         delete_btn.setStyleSheet(STYLES['button_secondary'])
@@ -558,6 +575,31 @@ class MainDialog(QDialog):
         self.settings.setValue("ua_preset", self.ua_preset_combo.currentIndex())
         self.settings.setValue("ua_custom", self.ua_custom_input.text())
 
+        # テーマ設定の保存（次回起動時に反映）
+        # QSettings は使わず vela_settings.ini に一本化することで
+        # 「まれに変更されない」問題を回避する
+        import configparser as _cp
+        from constants import CONFIG_DIR as _CDIR
+        selected_theme = self.theme_combo.currentText()
+        _ini_path = _CDIR / "vela_settings.ini"
+        _cfg = _cp.ConfigParser()
+        if _ini_path.exists():
+            _cfg.read(str(_ini_path), encoding="utf-8")
+        _section = "VELABrowser/Praxis"
+        if not _cfg.has_section(_section):
+            _cfg.add_section(_section)
+        # 現在の保存済みテーマを ini から直接読んで比較（QSettingsを経由しない）
+        old_theme = _cfg.get(_section, "theme", fallback="Default")
+        theme_changed = (old_theme != selected_theme)
+        _cfg.set(_section, "theme", selected_theme)
+        try:
+            with open(str(_ini_path), "w", encoding="utf-8") as _f:
+                _cfg.write(_f)
+            if theme_changed:
+                print(f"[INFO] Theme will change to '{selected_theme}' on next launch")
+        except OSError as _e:
+            print(f"[WARN] Failed to save theme setting: {_e}")
+
         # 実験的機能
         flags_changed = False
         for key, cb in self._flag_checks.items():
@@ -577,12 +619,14 @@ class MainDialog(QDialog):
         if browser:
             browser.apply_settings()
 
-        if flags_changed:
-            QMessageBox.information(
-                self, "保存完了",
-                "設定を保存しました。\n\n"
-                "Chromium フラグの変更を反映するには\nVELA を再起動してください。"
-            )
+        if flags_changed or theme_changed:
+            msg = "設定を保存しました。\n\n"
+            if theme_changed:
+                msg += f"テーマを '{selected_theme}' に変更しました。\n"
+                msg += "次回起動時に新しいテーマが適用されます。\n"
+            if flags_changed:
+                msg += "Chromium フラグの変更を反映するには VELA を再起動してください。"
+            QMessageBox.information(self, "保存完了", msg.strip())
         else:
             QMessageBox.information(self, "保存完了", "設定を保存しました。一部の設定は再起動後に完全に有効になります。")
     def reset_settings_to_default(self):
@@ -607,6 +651,10 @@ class MainDialog(QDialog):
             self.hardware_acceleration_check.setChecked(True)
             self.ua_preset_combo.setCurrentIndex(0)
             self.ua_custom_input.setText("")
+            # テーマをDefaultに戻す
+            default_idx = self.theme_combo.findText("Default")
+            if default_idx >= 0:
+                self.theme_combo.setCurrentIndex(default_idx)
             # 実験的機能
             for cb in self._flag_checks.values():
                 cb.setChecked(False)
@@ -665,6 +713,21 @@ class MainDialog(QDialog):
         
         self.bookmark_tree.expandAll()
     
+    def _on_tab_widget_changed(self, index):
+        """タブ切り替え時の処理"""
+        if index == 3:  # ブックマークタブ
+            self._update_add_bookmark_btn()
+
+    def _update_add_bookmark_btn(self):
+        """「新規追加」ボタンの有効/無効を current_url の状態で再評価する"""
+        enabled = bool(
+            self.current_url
+            and not self.current_url.startswith("about:")
+            and not self.current_url.startswith("chrome:")
+        )
+        if hasattr(self, 'add_bookmark_btn'):
+            self.add_bookmark_btn.setEnabled(enabled)
+
     def add_current_page_bookmark(self):
         """現在のページをブックマークに追加する（AddBookmarkDialog を使用）"""
         if not self.current_url:

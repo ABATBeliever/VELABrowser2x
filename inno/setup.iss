@@ -3,7 +3,7 @@
 ; Inno Setup is here : https://jrsoftware.org/isdl.ph
 ; Do not locate in non-ASCII Path
 #define MyAppName "VELA Browser"
-#define MyAppVersion "2.1.2.1"
+#define MyAppVersion "2.1.3.0"
 #define MyAppPublisher "ABATBeliever"
 #define MyAppURL "https://abatbeliever.net/software/bin/VELABrowser"
 #define MyAppExeName "VELABrowser.exe"
@@ -16,6 +16,11 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
+VersionInfoVersion={#MyAppVersion}
+VersionInfoDescription={#MyAppOutputName}
+VersionInfoProductName={#MyAppOutputName}
+VersionInfoProductVersion={#MyAppVersion}
+VersionInfoCompany={#MyAppPublisher}
 DefaultDirName={autopf}\VELABrowserx64
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesAllowed=x64compatible

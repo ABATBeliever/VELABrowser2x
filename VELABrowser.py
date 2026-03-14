@@ -39,8 +39,8 @@ from pathlib import Path
 
 BROWSER_NAME = "VELA"
 BROWSER_CODENAME = "Praxis"
-BROWSER_VERSION_SEMANTIC = "2.1.2.1"
-BROWSER_VERSION_NAME = "2.1.2.1"
+BROWSER_VERSION_SEMANTIC = "2.1.3.0"
+BROWSER_VERSION_NAME = "2.1.3.0"
 BROWSER_FULL_NAME = f"{BROWSER_NAME} {BROWSER_CODENAME} {BROWSER_VERSION_NAME}"
 
 def detect_browser_target_architecture():
@@ -149,6 +149,10 @@ STATE_DIR   = _state_home  / _VELA_APP_NAME
 
 for _d in (CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR):
     _d.mkdir(parents=True, exist_ok=True)
+
+# テーマ（スキン）ディレクトリ
+THEMES_DIR = CONFIG_DIR / "themes"
+THEMES_DIR.mkdir(parents=True, exist_ok=True)
 
 # 旧来パス（移行元の検出に使用）
 LEGACY_DATA_DIR = Path.home() / ".VELA_Browser"
@@ -674,6 +678,44 @@ sys.modules.setdefault("constants", sys.modules[__name__])
 
 
 # =====================================================================
+# テーマエンジン初期化
+# =====================================================================
+# STYLES は theme.py の init_theme_engine() で生成される。
+# QSettings からテーマ名を読み、テーマファイルが存在すれば適用する。
+# ここではまだ QApplication が存在しないため QSettings は直接使わず、
+# configparser で ini ファイルを直接読む（QSettings はmain()以降で使用）。
+# =====================================================================
+
+from theme import init_theme_engine, STYLES as _theme_styles_placeholder
+
+def _load_initial_theme() -> str:
+    """
+    QApplication 生成前にテーマ設定を読み込む（configparser 経由）。
+    vela_settings.ini を唯一の参照元とし、読み込みに失敗した場合は
+    "Default" にフォールバックする。
+    """
+    import configparser as _cp
+    _ini = CONFIG_DIR / "vela_settings.ini"
+    if not _ini.exists():
+        return "Default"
+    try:
+        _cfg = _cp.ConfigParser()
+        _cfg.read(str(_ini), encoding="utf-8")
+        theme = _cfg.get("VELABrowser/Praxis", "theme", fallback="Default").strip()
+        return theme if theme else "Default"
+    except Exception as e:
+        print(f"[WARN] Failed to read theme from vela_settings.ini: {e}")
+        return "Default"
+
+_initial_theme = _load_initial_theme()
+init_theme_engine(THEMES_DIR, _initial_theme)
+
+# STYLES を theme モジュールからインポートしてこのモジュール空間に公開する
+# （他モジュールが from constants import STYLES でアクセスできるようにする）
+from theme import STYLES  # noqa: F811  (上書きで OK)
+
+
+# =====================================================================
 # 起動前チェック: バージョン整合性
 # =====================================================================
 
@@ -850,77 +892,27 @@ def main():
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QFont
 
-    # ---- Chromium フラグを QApplication 生成前に適用 ----
-    # sys.argv への追加は QApplication(sys.argv) より前に行う必要がある
-    from browser import apply_chromium_flags_from_settings
-    apply_chromium_flags_from_settings()
-
-    # ---- ヘッダーをコンソール／ログに出力 ----
+    # ---- ヘッダーをコンソール／ログに出力（最初に表示） ----
     print(f"\n{BROWSER_FULL_NAME}")
     print("\nCopyright (C) 2025-2026 ABATBeliever")
     print("VELA Website     | https://abatbeliever.net/app/VELABrowser/")
     print("VELA Github Repo | https://github.com/ABATBeliever/VELABrowser2x")
     print(f"[INFO] Data Directory : {DATA_DIR}")
+    print(f"[INFO] Themes Directory : {THEMES_DIR}")
     print(f"[INFO] Log File       : {LOG_FILE}")
+    from theme import theme_engine as _te
+    print(f"[INFO] Theme          : {_te.current_theme() if _te else 'Default'}")
+
+    # ---- Chromium フラグを QApplication 生成前に適用 ----
+    # sys.argv への追加は QApplication(sys.argv) より前に行う必要がある
+    from browser import apply_chromium_flags_from_settings
+    apply_chromium_flags_from_settings()
 
     app = QApplication(sys.argv)
 
-    app.setStyleSheet("""
-        QWidget {
-            background-color: #ffffff;
-            color: #333333;
-        }
-        QMessageBox {
-            background-color: #ffffff;
-            color: #333333;
-        }
-        QMessageBox QLabel {
-            color: #333333;
-        }
-        QMessageBox QPushButton {
-            background-color: #0078d4;
-            color: #ffffff;
-            border: none;
-            padding: 6px 16px;
-            border-radius: 4px;
-            min-width: 80px;
-        }
-        QMessageBox QPushButton:hover {
-            background-color: #106ebe;
-        }
-        QFileDialog {
-            background-color: #ffffff;
-            color: #333333;
-        }
-        QFileDialog QLabel {
-            color: #333333;
-        }
-        QFileDialog QPushButton {
-            background-color: #ffffff;
-            color: #333333;
-            border: 1px solid #e0e0e0;
-            padding: 6px 16px;
-            border-radius: 4px;
-        }
-        QFileDialog QTreeView, QFileDialog QListView {
-            background-color: #ffffff;
-            color: #333333;
-            border: 1px solid #e0e0e0;
-        }
-        QFileDialog QTreeView::item, QFileDialog QListView::item {
-            color: #333333;
-        }
-        QFileDialog QTreeView::item:selected, QFileDialog QListView::item:selected {
-            background-color: #0078d4;
-            color: #ffffff;
-        }
-        QToolTip {
-            background-color: #333333;
-            color: #ffffff;
-            border: 1px solid #555555;
-            padding: 4px;
-        }
-    """)
+    # テーマエンジンが生成した app_global スタイルシートを適用
+    from theme import STYLES as _app_styles
+    app.setStyleSheet(_app_styles["app_global"])
 
     font = QFont()
     font.setPointSize(8)

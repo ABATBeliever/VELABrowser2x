@@ -78,6 +78,7 @@ import qtawesome as qta
 
 from constants import STYLES, BROWSER_FULL_NAME, BROWSER_VERSION_SEMANTIC, DOWNLOADS_DIR, USER_AGENT_PRESETS, \
     PROFILE_PATH, INCOGNITO_CACHE_PATH, INCOGNITO_STATE_PATH, CACHE_DIR, CHECK_FOR_UPDATES
+from theme import STYLES as _theme_STYLES  # noqa: F811
 from managers import HistoryManager, BookmarkManager, DownloadManager, SessionManager, UpdateChecker
 from dialogs import AddBookmarkDialog, MainDialog, FindDialog, SavePageDialog
 
@@ -203,13 +204,13 @@ class TabItemWidget(QWidget):
         # シークレットアイコン（シークレットタブのみ）
         if self._incognito:
             self.incognito_icon = QLabel()
-            self.incognito_icon.setPixmap(qta.icon('fa5s.user-secret', color='#8a2be2').pixmap(14, 14))
+            self.incognito_icon.setPixmap(qta.icon('fa5s.user-secret', color=STYLES['icon_color_incognito']).pixmap(14, 14))
             self.incognito_icon.setStyleSheet("background: transparent; padding: 0px;")
             layout.addWidget(self.incognito_icon)
         
         # ミュートアイコン（初期状態では非表示）
         self.mute_icon = QLabel()
-        self.mute_icon.setPixmap(qta.icon('fa5s.volume-mute', color='#666').pixmap(12, 12))
+        self.mute_icon.setPixmap(qta.icon('fa5s.volume-mute', color=STYLES['icon_color_default']).pixmap(12, 12))
         self.mute_icon.setStyleSheet("background: transparent; padding: 0px;")
         self.mute_icon.setVisible(False)
         layout.addWidget(self.mute_icon)
@@ -219,20 +220,13 @@ class TabItemWidget(QWidget):
         if self._incognito:
             self.title_label.setStyleSheet(STYLES['incognito_title_label'])
         else:
-            self.title_label.setStyleSheet("""
-                QLabel {
-                    background: transparent;
-                    color: #2e2e2e;
-                    padding: 0px;
-                    font-size: 10pt;
-                }
-            """)
+            self.title_label.setStyleSheet(STYLES['tab_title_label'])
         self.title_label.setWordWrap(False)
         layout.addWidget(self.title_label, 1)
         
         # 閉じるボタン
         self.close_button = QPushButton()
-        self.close_button.setIcon(qta.icon('fa5s.times', color='#666'))
+        self.close_button.setIcon(qta.icon('fa5s.times', color=STYLES['icon_color_default']))
         self.close_button.setStyleSheet(STYLES['tab_item_close_button'])
         self.close_button.setToolTip("タブを閉じる")
         self.close_button.clicked.connect(self.close_requested.emit)
@@ -659,12 +653,12 @@ class VerticalTabBrowser(QMainWindow):
         menu.setStyleSheet(STYLES['menu'])
         
         # 新しいタブ
-        new_tab_action = QAction(qta.icon('fa5s.plus', color='#4a90d9'), "新しいタブ", self)
+        new_tab_action = QAction(qta.icon('fa5s.plus', color=STYLES['icon_color_accent']), "新しいタブ", self)
         new_tab_action.triggered.connect(lambda: self.add_new_tab(self.settings.value("homepage", "https://www.google.com")))
         menu.addAction(new_tab_action)
         
         # シークレットタブ
-        incognito_action = QAction(qta.icon('fa5s.user-secret', color='#8a2be2'), "シークレットタブ", self)
+        incognito_action = QAction(qta.icon('fa5s.user-secret', color=STYLES['icon_color_incognito']), "シークレットタブ", self)
         incognito_action.triggered.connect(lambda: self.add_new_tab(
             self.settings.value("homepage", "https://www.google.com"), incognito=True))
         menu.addAction(incognito_action)
@@ -672,53 +666,53 @@ class VerticalTabBrowser(QMainWindow):
         menu.addSeparator()
         
         # ブックマーク
-        bookmark_action = QAction(qta.icon('fa5s.star', color='#f4c430'), "ブックマーク", self)
+        bookmark_action = QAction(qta.icon('fa5s.star', color=STYLES['icon_color_bookmark']), "ブックマーク", self)
         bookmark_action.triggered.connect(self.show_bookmarks_dialog)
         menu.addAction(bookmark_action)
         
         # 履歴
-        history_action = QAction(qta.icon('fa5s.history', color='#666'), "履歴", self)
+        history_action = QAction(qta.icon('fa5s.history', color=STYLES['icon_color_default']), "履歴", self)
         history_action.triggered.connect(self.show_history_dialog)
         menu.addAction(history_action)
         
         # ダウンロード
-        download_action = QAction(qta.icon('fa5s.download', color='#666'), "ダウンロード", self)
+        download_action = QAction(qta.icon('fa5s.download', color=STYLES['icon_color_default']), "ダウンロード", self)
         download_action.triggered.connect(self.show_download_dialog)
         menu.addAction(download_action)
         
         menu.addSeparator()
         
         # ローカルファイルを開く
-        local_action = QAction(qta.icon('fa5s.folder-open', color='#666'), "ローカルファイルを開く", self)
+        local_action = QAction(qta.icon('fa5s.folder-open', color=STYLES['icon_color_default']), "ローカルファイルを開く", self)
         local_action.triggered.connect(self.open_local_file)
         menu.addAction(local_action)
         
         # ページ内を検索
-        find_action = QAction(qta.icon('fa5s.search', color='#666'), "ページ内を検索", self)
+        find_action = QAction(qta.icon('fa5s.search', color=STYLES['icon_color_default']), "ページ内を検索", self)
         find_action.triggered.connect(self.find_in_page)
         menu.addAction(find_action)
         
         # ページを保存
-        save_page_action = QAction(qta.icon('fa5s.camera', color='#666'), "ページを保存", self)
+        save_page_action = QAction(qta.icon('fa5s.camera', color=STYLES['icon_color_default']), "ページを保存", self)
         save_page_action.triggered.connect(self.save_page)
         menu.addAction(save_page_action)
         
         menu.addSeparator()
         
         # 設定（設定タブを開く）
-        settings_action = QAction(qta.icon('fa5s.cog', color='#666'), "設定", self)
+        settings_action = QAction(qta.icon('fa5s.cog', color=STYLES['icon_color_default']), "設定", self)
         settings_action.triggered.connect(self.show_main_dialog)
         menu.addAction(settings_action)
         
         # ブラウザについて
-        about_action = QAction(qta.icon('fa5s.info-circle', color='#666'), "ブラウザについて", self)
+        about_action = QAction(qta.icon('fa5s.info-circle', color=STYLES['icon_color_default']), "ブラウザについて", self)
         about_action.triggered.connect(self.show_about_dialog)
         menu.addAction(about_action)
         
         menu.addSeparator()
         
         # 終了
-        exit_action = QAction(qta.icon('fa5s.sign-out-alt', color='#d9534f'), "終了", self)
+        exit_action = QAction(qta.icon('fa5s.sign-out-alt', color=STYLES['icon_color_danger']), "終了", self)
         exit_action.triggered.connect(self.close)
         menu.addAction(exit_action)
         
@@ -747,7 +741,15 @@ class VerticalTabBrowser(QMainWindow):
     
     def show_history_dialog(self):
         """履歴ダイアログを表示"""
-        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
+        current_url = ""
+        current_title = ""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem):
+            current_url = current_item.web_view.url().toString()
+            current_title = current_item.web_view.title()
+        dialog = MainDialog(
+            self.history_manager, self.bookmark_manager, self.download_manager, self,
+            current_url=current_url, current_title=current_title)
         dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
         dialog.tab_widget.setCurrentIndex(2)  # 履歴タブを選択
         dialog.exec()
@@ -783,7 +785,15 @@ class VerticalTabBrowser(QMainWindow):
             "do_not_track": self.settings.value("do_not_track", False, type=bool),
         }
         
-        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
+        current_url = ""
+        current_title = ""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem):
+            current_url = current_item.web_view.url().toString()
+            current_title = current_item.web_view.title()
+        dialog = MainDialog(
+            self.history_manager, self.bookmark_manager, self.download_manager, self,
+            current_url=current_url, current_title=current_title)
         dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
         dialog.show_settings_tab()
         dialog.exec()
@@ -814,21 +824,36 @@ class VerticalTabBrowser(QMainWindow):
     
     def show_about_dialog(self):
         """ブラウザについてダイアログ表示"""
-        dialog = MainDialog(self.history_manager, self.bookmark_manager, self.download_manager, self)
+        current_url = ""
+        current_title = ""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem):
+            current_url = current_item.web_view.url().toString()
+            current_title = current_item.web_view.title()
+        dialog = MainDialog(
+            self.history_manager, self.bookmark_manager, self.download_manager, self,
+            current_url=current_url, current_title=current_title)
         dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
         dialog.show_about_tab()
         dialog.exec()
     
     def show_download_dialog(self):
-        """ダウンロードマネージャー表示（シングルインスタンスで使い回し）"""
-        if not hasattr(self, '_download_dialog') or self._download_dialog is None:
-            self._download_dialog = MainDialog(
-                self.history_manager, self.bookmark_manager, self.download_manager, self)
-            self._download_dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
-            self._download_dialog.finished.connect(lambda: setattr(self, '_download_dialog', None))
-        self._download_dialog.show_download_tab()
-        self._download_dialog.raise_()
-        self._download_dialog.show()
+        """ダウンロードマネージャー表示"""
+        # シングルトンを廃止し毎回生成する。
+        # current_url="" で使い回されるとブックマークの「新規追加」が
+        # 無効化されたままになるバグを防ぐため。
+        current_url = ""
+        current_title = ""
+        current_item = self.tab_list.currentItem()
+        if current_item and isinstance(current_item, TabItem):
+            current_url = current_item.web_view.url().toString()
+            current_title = current_item.web_view.title()
+        dialog = MainDialog(
+            self.history_manager, self.bookmark_manager, self.download_manager, self,
+            current_url=current_url, current_title=current_title)
+        dialog.open_url.connect(lambda url: self.add_new_tab(url, activate=True))
+        dialog.show_download_tab()
+        dialog.exec()
     
     def save_page(self):
         """ページを保存（PNG / PDF）"""
@@ -867,26 +892,10 @@ class VerticalTabBrowser(QMainWindow):
         
         # 新規タブボタン（横幅いっぱいに拡張）
         new_tab_btn = QPushButton()
-        new_tab_btn.setIcon(qta.icon('fa5s.plus', color='#2e2e2e'))
+        new_tab_btn.setIcon(qta.icon('fa5s.plus', color=STYLES['icon_color_new_tab']))
         new_tab_btn.setToolTip("新規タブ")
         new_tab_btn.setMinimumHeight(36)
-        new_tab_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                color: #2e2e2e;
-                border: 1px solid #dcdfe3;
-                border-radius: 4px;
-                padding: 6px 8px;
-            }
-            QPushButton:hover {
-                background-color: #eaf2fb;
-                border-color: #4a90d9;
-                color: #1f5fa5;
-            }
-            QPushButton:pressed {
-                background-color: #d6e8fa;
-            }
-        """)
+        new_tab_btn.setStyleSheet(STYLES['button_secondary'])
         new_tab_btn.clicked.connect(lambda: self.add_new_tab(self.settings.value("homepage", "https://www.google.com")))
         layout.addWidget(new_tab_btn)
         
@@ -915,21 +924,21 @@ class VerticalTabBrowser(QMainWindow):
         layout.addWidget(toolbar)
         
         self.back_btn = QPushButton()
-        self.back_btn.setIcon(qta.icon('fa5s.arrow-left', color='#333'))
+        self.back_btn.setIcon(qta.icon('fa5s.arrow-left', color=STYLES['icon_color_primary']))
         self.back_btn.setToolTip("戻る")
         self.back_btn.setFixedSize(32, 32)
         self.back_btn.clicked.connect(self.go_back)
         toolbar.addWidget(self.back_btn)
         
         self.forward_btn = QPushButton()
-        self.forward_btn.setIcon(qta.icon('fa5s.arrow-right', color='#333'))
+        self.forward_btn.setIcon(qta.icon('fa5s.arrow-right', color=STYLES['icon_color_primary']))
         self.forward_btn.setToolTip("進む")
         self.forward_btn.setFixedSize(32, 32)
         self.forward_btn.clicked.connect(self.go_forward)
         toolbar.addWidget(self.forward_btn)
         
         self.reload_btn = QPushButton()
-        self.reload_btn.setIcon(qta.icon('fa5s.sync-alt', color='#333'))
+        self.reload_btn.setIcon(qta.icon('fa5s.sync-alt', color=STYLES['icon_color_primary']))
         self.reload_btn.setToolTip("再読み込み")
         self.reload_btn.setFixedSize(32, 32)
         self.reload_btn.clicked.connect(self.reload_page)
@@ -955,14 +964,14 @@ class VerticalTabBrowser(QMainWindow):
         toolbar.addWidget(self.url_bar)
         
         bookmark_add_btn = QPushButton()
-        bookmark_add_btn.setIcon(qta.icon('fa5s.star', color='#f4c430'))
+        bookmark_add_btn.setIcon(qta.icon('fa5s.star', color=STYLES['icon_color_bookmark']))
         bookmark_add_btn.setToolTip("ブックマーク")
         bookmark_add_btn.setFixedSize(32, 32)
         bookmark_add_btn.clicked.connect(self.show_bookmarks_dialog)
         toolbar.addWidget(bookmark_add_btn)
         
         menu_btn = QPushButton()
-        menu_btn.setIcon(qta.icon('fa5s.ellipsis-h', color='#666'))
+        menu_btn.setIcon(qta.icon('fa5s.ellipsis-h', color=STYLES['icon_color_default']))
         menu_btn.setToolTip("メニュー")
         menu_btn.setFixedSize(32, 32)
         menu_btn.clicked.connect(self.show_menu)
@@ -1314,24 +1323,24 @@ class VerticalTabBrowser(QMainWindow):
         menu.setStyleSheet(STYLES['tab_context_menu'])
         
         # タブを閉じる
-        close_action = QAction(qta.icon('fa5s.times', color='#d13438'), "タブを閉じる", self)
+        close_action = QAction(qta.icon('fa5s.times', color=STYLES['icon_color_danger']), "タブを閉じる", self)
         close_action.triggered.connect(lambda: self.close_tab_by_item(item))
         menu.addAction(close_action)
         
         # 閉じたタブを開く
-        reopen_action = QAction(qta.icon('fa5s.undo', color='#666'), "閉じたタブを開く", self)
+        reopen_action = QAction(qta.icon('fa5s.undo', color=STYLES['icon_color_default']), "閉じたタブを開く", self)
         reopen_action.triggered.connect(self.reopen_closed_tab)
         menu.addAction(reopen_action)
         
         # タブを複製
-        duplicate_action = QAction(qta.icon('fa5s.clone', color='#0078d4'), "タブを複製", self)
+        duplicate_action = QAction(qta.icon('fa5s.clone', color=STYLES['icon_color_accent']), "タブを複製", self)
         duplicate_action.triggered.connect(lambda: self.duplicate_tab(item))
         menu.addAction(duplicate_action)
         
         menu.addSeparator()
         
         # ブックマークに追加
-        bookmark_action = QAction(qta.icon('fa5s.star', color='#f4c430'), "ブックマークに追加", self)
+        bookmark_action = QAction(qta.icon('fa5s.star', color=STYLES['icon_color_bookmark']), "ブックマークに追加", self)
         bookmark_action.triggered.connect(lambda: self.add_bookmark_from_tab(item))
         menu.addAction(bookmark_action)
         
@@ -1339,10 +1348,10 @@ class VerticalTabBrowser(QMainWindow):
         
         # ミュート/ミュート解除
         if item.is_muted:
-            mute_action = QAction(qta.icon('fa5s.volume-up', color='#333'), "ミュート解除", self)
+            mute_action = QAction(qta.icon('fa5s.volume-up', color=STYLES['icon_color_primary']), "ミュート解除", self)
             mute_action.triggered.connect(lambda: self.toggle_mute(item))
         else:
-            mute_action = QAction(qta.icon('fa5s.volume-mute', color='#666'), "ミュート", self)
+            mute_action = QAction(qta.icon('fa5s.volume-mute', color=STYLES['icon_color_default']), "ミュート", self)
             mute_action.triggered.connect(lambda: self.toggle_mute(item))
         menu.addAction(mute_action)
         
